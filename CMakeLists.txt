@@ -14,7 +14,7 @@ if (UNIX)
     set (install_dir "${CMAKE_INSTALL_PREFIX}/share/wireshark/plugins")
   endif ()
   set (CMAKE_C_FLAGS "-Wall -Wextra")
-  set (CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -ansi -pedantic")
+  set (CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g3 -ansi -pedantic")
 endif ()
 
 add_executable (pipelisp ${srcs})

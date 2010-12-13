@@ -27,10 +27,16 @@ static unsigned ARef_helper (const Array* arr, unsigned i)
     (&((Type*) (arr).a)[ARef_helper (&(arr), (unsigned) i)])
 #else
 
+#define dARef( Type, arr, i ) \
+    (((Type*) (arr).a)[i])
+
 #define ARef( Type, arr, i ) \
-    (&((Type*) (arr).a)[i])
+    (&dARef(Type, arr, i))
 
 #endif
+
+#define dARefLast( Type, arr ) \
+    dARef( Type, arr, (arr).n - 1 )
 
 #define ARefLast( Type, arr ) \
     ARef( Type, arr, (arr).n - 1 )
@@ -48,14 +54,23 @@ static unsigned ARef_helper (const Array* arr, unsigned i)
     } while (0)
 
 
+#define dPushStack( Type, sk, elem ) \
+    do { \
+        GrowArray( Type, sk, 1 ); \
+        dARefLast(Type, sk) = elem; \
+    } while (0)
+
 #define PushStack( Type, sk, elem ) \
     do { \
         GrowArray( Type, sk, 1 ); \
         memcpy (ARefLast(Type, sk), elem, sizeof (Type)); \
     } while (0)
 
+#define dPopStack( Type, sk ) \
+    dARef(Type, sk, -- (sk).n)
+
 #define PopStack( Type, sk ) \
-    ARef(Type, sk, -- (sk).n)
+    (&dPopStack( Type, sk ))
 
 #define CleanupArray( Type, arr ) \
     do { \

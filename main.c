@@ -1,24 +1,33 @@
 
 #include <assert.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "array.c"
 static Array Internal_Types;
-static Array Simple_Types;
-static Array Compound_Types;
+static Array Named_Types;
 static Array Named_Functions;
 
 
 typedef size_t pkey_t;
 
-static const pkey_t MUTABIT = (pkey_t)1 << (8 * sizeof (pkey_t) -1);
-static const pkey_t CALLBIT = (pkey_t)1 << (8 * sizeof (pkey_t) -2);
-static const pkey_t AnyType = (pkey_t)1 << (8 * sizeof (pkey_t) -1);
+#define NBitsInByte 8
+#define HIGHBIT ((pkey_t)1 << (NBitsInByte * sizeof (pkey_t) -1))
+static const pkey_t MUTABIT = HIGHBIT >> 1;
+static const pkey_t CALLBIT = HIGHBIT;
+#undef HIGHBIT
+#define HIGHBIT ((pkey_t)1 << (NBitsInByte * sizeof (unsigned) -1))
+static const unsigned WILDBIT = HIGHBIT;
+#undef HIGHBIT
+    /* static const char* NilTypeName = "nil"; */
+    /* static const char* AnyTypeName = "any"; */
 static const pkey_t FunctionInternalType = 0;
+static const pkey_t AnyType = 1;
 
 #define StripPKey(k)  (k & ~(MUTABIT | CALLBIT))
+#define StripWildBit(k)  (k & ~WILDBIT)
 
 struct pair_struct
 {
@@ -27,8 +36,16 @@ struct pair_struct
 };
 typedef struct pair_struct Pair;
 
-enum function_type_enum { StandardFunc, InternalFunc, ConstructFunc, AccessFunc, NFuncTypes };
+enum function_type_enum
+{
+    StandardFunc, InternalFunc,
+    ConstructFunc, AccessFunc,
+    MultiFunc,
+    NFuncTypes
+};
 typedef enum function_type_enum FunctionType;
+
+typedef Array FunctionSet;
 
 struct function_struct
 {
@@ -56,11 +73,13 @@ struct function_struct
         {
             unsigned idx;
         } access;
+        struct function_struct_multi_case
+        {
+            FunctionSet funcs;
+        } multi;
     } info;
 };
 typedef struct function_struct Function;
-
-typedef Array FunctionSet;
 
 struct named_function_set_struct
 {
@@ -84,33 +103,23 @@ struct type_info_struct
 };
 typedef struct type_info_struct TypeInfo;
 
-struct type_info_set_struct
-{
-    char* name;
-    unsigned ntypes;
-    pkey_t*   types;
-};
-typedef struct type_info_set_struct TypeInfoSet;
-
 struct internal_type_info_struct
 {
-    void*  (* copy_fn) (const void*);
-    void   (* free_fn) (void*);
-    void  (* write_fn) (FILE*, const void*);
+    void* (* copy_fn) (const void*);
+    void  (* free_fn) (void*);
+    void (* write_fn) (FILE*, const void*);
     void (** get_fns) (Pair*, unsigned, void*);
 };
 typedef struct internal_type_info_struct InternalTypeInfo;
 
 static const TypeInfo* type_info (pkey_t type)
 {
-    assert (type == StripPKey( type ));
-    assert (type < Simple_Types.n);
-    return ARef( TypeInfo, Simple_Types, type );
+    assert (type < Named_Types.n);
+    return ARef( TypeInfo, Named_Types, type );
 }
 
 static const InternalTypeInfo* internal_type_info (pkey_t type)
 {
-    assert (type == StripPKey( type ));
     assert (type < Internal_Types.n);
     return ARef( InternalTypeInfo, Internal_Types, type );
 }
@@ -119,7 +128,7 @@ static
     unsigned
 num_type_members (pkey_t type)
 {
-    return type_info (type) -> nmembs;
+    return StripWildBit(type_info (type) -> nmembs);
 }
 
 static
@@ -131,7 +140,7 @@ write_Pair (FILE* out, const Pair* pair)
         type = FunctionInternalType;
     else
         type = StripPKey(pair->key);
-    assert (type < Simple_Types.n);
+    assert (type < Named_Types.n);
     if (type < Internal_Types.n)
     {
         const InternalTypeInfo* info;
@@ -168,16 +177,8 @@ write_Function (FILE* out, const Function* f, const char* name)
     {
         pkey_t t;
         fputc (' ', out);
-        t = f->types[i];
-        if (AnyType & t)
-        {
-            t &= ~AnyType;
-            fputs (ARef( TypeInfoSet, Compound_Types, t )->name, out);
-        }
-        else
-        {
-            fputs (ARef( TypeInfo, Simple_Types, t )->name, out);
-        }
+        t = f->types[f->nargs -i -1];
+        fputs (ARef( TypeInfo, Named_Types, t )->name, out);
     }
     fputc (')', out);
 }
@@ -213,7 +214,7 @@ cleanup_Pair (Pair* pair)
 {
     pkey_t type;
     type = StripPKey(pair->key);
-    assert (type < Simple_Types.n);
+    assert (type < Named_Types.n);
     if (type < Internal_Types.n)
     {
         const InternalTypeInfo* info;
@@ -227,6 +228,7 @@ cleanup_Pair (Pair* pair)
     {
         const TypeInfo* info;
         info = type_info (type);
+        assert (info->nmembs == StripWildBit(info->nmembs));
         if (info->nmembs)
         {
             unsigned i;
@@ -252,7 +254,7 @@ copy_Pair (Pair* dst, const Pair* src)
 {
     pkey_t type;
     type = StripPKey(src->key);
-    assert (type < Simple_Types.n);
+    assert (type < Named_Types.n);
     if (type < Internal_Types.n)
     {
         const InternalTypeInfo* info;
@@ -295,27 +297,24 @@ copy_Pair (Pair* dst, const Pair* src)
 
 static
     int
-typeofsetp (pkey_t a, pkey_t ts)
-{
-    TypeInfoSet* set;
-    unsigned i;
-    if (!ts)  return 1;
-    assert (ts < Compound_Types.n);
-    set = ARef( TypeInfoSet, Compound_Types, ts );
-    for (i = 0; i < set->ntypes; ++i)
-        if (a == set->types[i])
-            return 1;
-    return 0;
-}
-
-static
-    int
 typeofp (pkey_t a, pkey_t t)
 {
-    if (AnyType & t)
-        return typeofsetp (a, StripPKey(t));
-    else
-        return a == t;
+    TypeInfo* info;
+    info = ARef( TypeInfo, Named_Types, a );
+    assert (info->nmembs == StripWildBit(info->nmembs));
+
+    if (AnyType == t)  return 1;
+
+    info = ARef( TypeInfo, Named_Types, t );
+    if (WILDBIT & info->nmembs)
+    {
+        unsigned i, ntypes;
+        ntypes = StripWildBit(info->nmembs);
+        for (i = 0; i < ntypes; ++i)
+            if (a == info->types[i])
+                return 1;
+    }
+    return a == t;
 }
 
 static
@@ -323,7 +322,7 @@ static
 find_function (unsigned nargs, const Pair* args, const FunctionSet* fset)
 {
     unsigned i;
-    for (i = 0; i < fset->N; ++i)
+    for (i = 0; i < fset->n; ++i)
     {
         const Function* func;
         unsigned j;
@@ -557,14 +556,7 @@ static void copy_TypeInfo (TypeInfo* dst, const TypeInfo* src)
 {
     dst->name   = MemDup( char, src->name, 1+strlen(src->name) );
     dst->nmembs = src->nmembs;
-    dst->types  = MemDup( pkey_t, src->types, src->nmembs );
-}
-
-static void copy_TypeInfoSet (TypeInfoSet* dst, const TypeInfoSet* src)
-{
-    dst->name   = MemDup( char, src->name, 1+strlen(src->name) );
-    dst->ntypes = src->ntypes;
-    dst->types  = MemDup( pkey_t, src->types, src->ntypes );
+    dst->types  = MemDup( pkey_t, src->types, StripWildBit(src->nmembs) );
 }
 
 static void cleanup_Function (Function* f)
@@ -587,15 +579,8 @@ static void cleanup_NamedFunctionSet (NamedFunctionSet* set)
 static void cleanup_TypeInfo (TypeInfo* info)
 {
     free (info->name);
-    if (info->nmembs)
+    if (StripWildBit(info->nmembs))
         free (info->types);
-}
-
-static void cleanup_TypeInfoSet (TypeInfoSet* set)
-{
-    free (set->name);
-    if (set->ntypes)
-        free (set->types);
 }
 
 static void reverse_types (unsigned ntypes, pkey_t* types)
@@ -650,64 +635,92 @@ static Function* add_named_function (const char* name, const Function* f)
     return f_new;
 }
 
-static pkey_t add_simple_type (const TypeInfo* info, const char* const* membs)
+static pkey_t ensure_named_type (const char* name)
+{
+    unsigned i;
+    TypeInfo* info;
+    for (i = 0; i < Named_Types.n; ++i)
+        if (0 == strcmp (ARef(TypeInfo, Named_Types, i)->name, name))
+            return i;
+
+    GrowArray( TypeInfo, Named_Types, 1 );
+    info = ARefLast( TypeInfo, Named_Types );
+    info->name = MemDup( char, name, 1+strlen(name) );
+    info->nmembs = WILDBIT;
+    return i;
+}
+
+static pkey_t add_simple_type (const TypeInfo* src, const char* const* membs)
 {
     unsigned i;
     Function f;
     pkey_t type;
-    TypeInfo* info_new;
+    TypeInfo* dst;
 
-    type = Simple_Types.n;
-    GrowArray( TypeInfo, Simple_Types, 1 );
+    type = ensure_named_type (src->name);
+    dst = ARef( TypeInfo, Named_Types, type );
+    assert (WILDBIT == dst->nmembs);
 
-    f.nargs = info->nmembs;
-    f.types = info->types;
+    f.nargs = src->nmembs;
+    f.types = src->types;
     f.type = ConstructFunc;
     f.info.construct.type = type;
+    add_named_function (src->name, &f);
 
-    add_named_function (info->name, &f);
-    info_new = ARef(TypeInfo, Simple_Types, type);
-    copy_TypeInfo (info_new, info);
-    reverse_types (info_new->nmembs, info_new->types);
+    dst->nmembs = src->nmembs;
+    dst->types  = MemDup(pkey_t, src->types, src->nmembs);
+    reverse_types (dst->nmembs, dst->types);
 
     f.nargs = 1;
     f.type = AccessFunc;
-    for (i = 0; i < info->nmembs; ++i)
+    for (i = 0; i < src->nmembs; ++i)
     {
         f.types = &type;
-        f.info.access.idx = info->nmembs - i - 1;
+        f.info.access.idx = src->nmembs - i - 1;
         add_named_function (membs[i], &f);
     }
-
 
     return type;
 }
 
-static pkey_t add_compound_type (const TypeInfoSet* set)
+static pkey_t add_compound_type (const TypeInfo* src)
 {
     pkey_t type;
-    type = Compound_Types.n;
-    GrowArray( TypeInfoSet, Compound_Types, 1 );
-    copy_TypeInfoSet (ARef(TypeInfoSet, Compound_Types, type), set);
-    return AnyType | type;
+    TypeInfo* dst;
+
+    type = ensure_named_type (src->name);
+    dst = ARef( TypeInfo, Named_Types, type );
+    assert (WILDBIT == dst->nmembs);
+
+    dst->nmembs = WILDBIT | src->nmembs;
+    dst->types  = MemDup(pkey_t, src->types, src->nmembs);
+    
+    return type;
+}
+
+static pkey_t find_named_type (const char* name)
+{
+    unsigned i;
+    for (i = 0; i < Named_Types.n; ++i)
+        if (0 == strcmp (ARef(TypeInfo, Named_Types, i)->name, name))
+            return i;
+    assert (0 && "Unknown type.");
 }
 
 static pkey_t find_simple_type (const char* name)
 {
     unsigned i;
-    for (i = 0; i < Simple_Types.n; ++i)
-        if (0 == strcmp (ARef(TypeInfo, Simple_Types, i)->name, name))
-            return i;
-    assert (0 && "Unknown type.");
+    i = find_named_type (name);
+    assert (!(WILDBIT & ARef( TypeInfo, Named_Types, i )->nmembs));
+    return i;
 }
 
 static pkey_t find_compound_type (const char* name)
 {
     unsigned i;
-    for (i = 0; i < Compound_Types.n; ++i)
-        if (0 == strcmp (ARef(TypeInfoSet, Compound_Types, i)->name, name))
-            return AnyType | i;
-    assert (0 && "Unknown type.");
+    i = find_named_type (name);
+    assert (WILDBIT & ARef( TypeInfo, Named_Types, i )->nmembs);
+    return i;
 }
 
 static void push_function (Runtime* run, const char* name, pkey_t nargs)
@@ -719,29 +732,14 @@ static void push_function (Runtime* run, const char* name, pkey_t nargs)
     PushStack( Pair, run->e, &pair );
 }
 
-int main ()
+static void init_lisp (Runtime* run)
 {
     const unsigned N = 1;
-    Runtime stacked_run;
-    Runtime* run;
-    run = &stacked_run;
-
-    InitArray( TypeInfo, Simple_Types, N );
-    InitArray( TypeInfoSet, Compound_Types, N );
+    InitArray( TypeInfo, Named_Types, N );
     InitArray( InternalTypeInfo, Internal_Types, N );
     InitArray( NamedFunctionSet, Named_Functions, N );
     InitArray( Pair, run->d, N );
     InitArray( Pair, run->e, N );
-
-    {
-            /* Add the /any/ type, it's hardcoded. */
-        pkey_t t;
-        TypeInfoSet ts;
-        ts.name = "any";
-        ts.ntypes = 0;
-        t = add_compound_type (&ts);
-        assert (AnyType == t);
-    }
 
     {   /* Add internal types. */
         TypeInfo info;
@@ -762,8 +760,168 @@ int main ()
     }
 
     {
+            /* Add the /any/ type, it's hardcoded. */
+        pkey_t t;
+        TypeInfo ts;
+        ts.name = "any";
+        ts.nmembs = 0;
+        t = add_compound_type (&ts);
+        assert (AnyType == t);
+    }
+}
+
+static void cleanup_lisp (Runtime* run)
+{
+    CleanupArray( Pair, run->d );
+    CleanupArray( Pair, run->e );
+    CleanupArray( NamedFunctionSet, Named_Functions );
+    CleanupArray( TypeInfo, Named_Types );
+    free (Internal_Types.a);
+}
+
+
+static unsigned parse_list (Array* arr, char* str)
+{
+    unsigned i = 1;
+    unsigned nmemb = 0;  /* #args + 1 */
+    unsigned diff = 1; /* Re-used state. */
+    unsigned toki; /* Current token index. */
+
+    if (str[0] != '(')  return 0;
+    str[0] = 0;
+
+    toki = arr->n;
+    GrowArray( Pair, *arr, 1 );
+
+    while (1)
+    {
+        if (!str[i])
+        {
+            diff = 0;
+            break;
+        }
+        else if (!isgraph (str[i]))
+        {
+            diff = 1;
+            str[i++] = 0;
+        }
+        else if (str[i] == ')')
+        {
+            diff = i+1;
+            str[i] = 0;
+            break;
+        }
+        else if (str[i] == '(')
+        {
+            ++ nmemb;
+            diff = parse_list (arr, &str[i]);
+            if (!diff)  break;
+            i += diff;
+        }
+        else
+        {
+            if (diff)
+            {
+                Pair* tok;
+                ++ nmemb;
+                diff = 0;
+                GrowArray( Pair, *arr, 1 );
+                tok = ARefLast( Pair, *arr );
+                tok->key = 0;
+                tok->val = &str[i];
+            }
+            ++ i;
+        }
+    }
+
+    if (diff)
+    {
+        Pair* fntok = ARef( Pair, *arr, toki );
+        fntok->key = CALLBIT | nmemb;
+        fntok->val = (void*) (arr->n - (size_t) fntok->val);
+    }
+    else
+    {
+            /* If there was a failure, revert parse tree. */
+        arr->n = toki;
+    }
+    return diff;
+}
+
+
+static void interp_deftype (const char* str)
+{
+    unsigned i;
+    Array parsed;
+    Pair* node;
+    char buf[1024];
+    assert ( 1024 > strlen (str) );
+    strcpy (buf, str);
+
+    InitArray( Pair, parsed, 1 );
+    
+    i = parse_list (&parsed, buf);
+    assert (i && "Parse failed.");
+    assert (!str[i]);
+
+    assert (parsed.n > 1);
+
+    node = ARef( Pair, parsed, 0 );
+    assert (CALLBIT & node->key);
+    assert (3 == (~CALLBIT & node->key));
+
+    node = ARef( Pair, parsed, 1 );
+    assert (!strcmp ("deftype", (char*)node->val));
+
+    node = ARef( Pair, parsed, 2 );
+    assert (CALLBIT & node->key);
+
+    free (parsed.a);
+}
+
+static void interp_def (const char* str)
+{
+    unsigned i;
+    Array parsed;
+    Pair* node;
+    char buf[1024];
+    assert ( 1024 > strlen (str) );
+    strcpy (buf, str);
+
+    InitArray( Pair, parsed, 1 );
+    
+    i = parse_list (&parsed, buf);
+    assert (i && "Parse failed.");
+
+    assert (parsed.n > 1);
+
+    node = ARef( Pair, parsed, 0 );
+    assert (CALLBIT & node->key);
+        /* Don't support variable assignment yet.
+         * Need more levels of scoping.
+         */
+    assert (3 == (~CALLBIT & node->key));
+
+    node = ARef( Pair, parsed, 1 );
+    assert (!strcmp ("def", (char*)node->val));
+
+    node = ARef( Pair, parsed, 2 );
+    assert (CALLBIT & node->key);
+
+    free (parsed.a);
+}
+
+int main ()
+{
+    Runtime stacked_run;
+    Runtime* run;
+    run = &stacked_run;
+
+    init_lisp (run);
+        /* interp_def ("(def (or (a yes) (b)) (yes))"); */
+
+    {
         TypeInfo info;
-        TypeInfoSet set;
         pkey_t types[10];
         const char* membs[10];
 
@@ -779,25 +937,25 @@ int main ()
 
         info.name = "cons";
         info.nmembs = 2;
-        types[0] = AnyType;
+        types[0] = find_named_type ("any");
         membs[0] = "car";
-        types[1] = AnyType | Compound_Types.n;
+        types[1] = ensure_named_type ("list");
         membs[1] = "cdr";
         add_simple_type (&info, membs);
 
-        set.name = "list";
-        set.ntypes = 2;
-        set.types = types;
+        info.name = "list";
+        info.nmembs = 2;
+        info.types = types;
         types[0] = find_simple_type ("cons");
         types[1] = find_simple_type ("nil");
-        add_compound_type (&set);
+        add_compound_type (&info);
 
-        set.name = "bool";
-        set.ntypes = 2;
-        set.types = types;
+        info.name = "bool";
+        info.nmembs = 2;
+        info.types = types;
         types[0] = find_simple_type ("yes");
         types[1] = find_simple_type ("nil");
-        add_compound_type (&set);
+        add_compound_type (&info);
     }
 
         /* Since pointers to /Named_Functions/ members are used,
@@ -1140,12 +1298,7 @@ int main ()
 
     eval (run);
 
-    CleanupArray( Pair, run->d );
-    CleanupArray( Pair, run->e );
-    CleanupArray( NamedFunctionSet, Named_Functions );
-    CleanupArray( TypeInfo, Simple_Types );
-    CleanupArray( TypeInfoSet, Compound_Types );
-    free (Internal_Types.a);
+    cleanup_lisp (run);
     return 0;
 }
 
