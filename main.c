@@ -514,12 +514,12 @@ eval1 (Runtime* run)
 
 static
     void
-eval (Runtime* run)
+eval (FILE* out, Runtime* run)
 {
     while (run->e.n)  eval1 (run);
     assert (1 == run->d.n);
-    write_Pair (stdout, ARef(Pair, run->d, 0));
-    fputs ("\n", stdout);
+    write_Pair (out, ARef(Pair, run->d, 0));
+    fputs ("\n", out);
 }
 
 static FunctionSet* find_named_function (const char* name)
@@ -732,14 +732,12 @@ static void push_function (Runtime* run, const char* name, pkey_t nargs)
     PushStack( Pair, run->e, &pair );
 }
 
-static void init_lisp (Runtime* run)
+static void init_lisp ()
 {
     const unsigned N = 1;
     InitArray( TypeInfo, Named_Types, N );
     InitArray( InternalTypeInfo, Internal_Types, N );
     InitArray( NamedFunctionSet, Named_Functions, N );
-    InitArray( Pair, run->d, N );
-    InitArray( Pair, run->e, N );
 
     {   /* Add internal types. */
         TypeInfo info;
@@ -770,10 +768,8 @@ static void init_lisp (Runtime* run)
     }
 }
 
-static void cleanup_lisp (Runtime* run)
+static void cleanup_lisp ()
 {
-    CleanupArray( Pair, run->d );
-    CleanupArray( Pair, run->e );
     CleanupArray( NamedFunctionSet, Named_Functions );
     CleanupArray( TypeInfo, Named_Types );
     free (Internal_Types.a);
@@ -911,13 +907,63 @@ static void interp_def (const char* str)
     free (parsed.a);
 }
 
-int main ()
+static void interp_eval (FILE* out, const char* str)
 {
+    unsigned i;
+    Array parsed;
+    const unsigned N = 1;
     Runtime stacked_run;
     Runtime* run;
+
+    char buf[4096];
+    assert ( 4096 > strlen (str) );
+    strcpy (buf, str);
+
     run = &stacked_run;
 
-    init_lisp (run);
+    InitArray( Pair, run->d, N );
+    InitArray( Pair, run->e, N );
+    InitArray( Pair, parsed, N );
+
+    i = parse_list (&parsed, buf);
+    assert (i && "Parse failed.");
+
+    for (i = 0; i < parsed.n; ++i)
+    {
+        Pair* node;
+        node = ARef( Pair, parsed, i );
+        if (CALLBIT & node->key)
+        {
+            unsigned nargs;
+            ++i;
+            nargs = StripPKey(node->key);
+            assert (nargs);
+            -- nargs;
+
+            node = ARef( Pair, parsed, i );
+            push_function (run, (char*) node->val, nargs);
+        }
+        else
+        {
+            Pair pair;
+                /* Assume it's a function for now. */
+            pair.key = find_simple_type ("func");
+            pair.val = find_named_function ((char*) node->val);
+            PushStack( Pair, run->e, &pair );
+        }
+    }
+    eval (out, run);
+
+    CleanupArray( Pair, run->d );
+    CleanupArray( Pair, run->e );
+    free (parsed.a);
+}
+
+int main ()
+{
+    FILE* out;
+    out = stdout;
+    init_lisp ();
         /* interp_def ("(def (or (a yes) (b)) (yes))"); */
 
     {
@@ -1176,129 +1222,50 @@ int main ()
 
 #if 0
 #elif 0
-    {push_function (run, "map", 2);
-        {
-            Pair pair;
-            pair.key = find_simple_type ("func");
-            pair.val = find_named_function ("list");
-            PushStack( Pair, run->e, &pair );
-        }
-        push_function (run, "nil", 0);
-    }
+    interp_eval (out, "(map list (nil))");
 
 #elif 0
-            push_function (run, "list", 1);
-            push_function (run, "yes", 0);
+    interp_eval (out, "(list (yes))");
 
 #elif 1
-    {push_function (run, "map", 2);
-        {
-            Pair pair;
-            pair.key = find_simple_type ("func");
-            pair.val = find_named_function ("not");
-            PushStack( Pair, run->e, &pair );
-        }
-        {push_function (run, "cons", 2);
-            push_function (run, "yes", 0);
-            {push_function (run, "cons", 2);
-                push_function (run, "nil", 0);
-                {push_function (run, "cons", 2);
-                    push_function (run, "yes", 0);
-                    push_function (run, "nil", 0);
-                }
-            }
-        }
+    {
+        const char* str =
+            "(map not (cons (yes) (cons (nil) (cons (yes) (nil)))))";
+        interp_eval (out, str);
     }
 
 #elif 0
-    {push_function (run, "car", 1);
-        {push_function (run, "list", 1);
-            {push_function (run, "list", 1);
-                push_function (run, "yes", 0);
-            }
-        }
+    interp_eval (out, "(car (list (list (yes))))");
+
+#elif 0
+    interp_eval (out, "(rev (cons (yes) (cons (nil) (nil))))");
+        /* (cons (nil) (cons (yes) (nil))) */
+#elif 0
+    {
+        const char* str =
+            "(cat (cons (yes) (nil))"
+            "     (cat (cons (nil) (cons (nil) (nil)))"
+            "          (cons (yes) (cons (yes) (cons (yes) (nil))))))";
+        interp_eval (out, str);
     }
 
 #elif 0
-    {push_function (run, "rev", 1);
-        {push_function (run, "cons", 2);
-            push_function (run, "yes", 0);
-            {push_function (run, "cons", 2);
-                push_function (run, "nil", 0);
-                push_function (run, "nil", 0);
-            }
-        }
+    {
+        const char* str =
+            "(cons (cons (yes) (nil))"
+            "      (cons (yes) (cons (yes)"
+            "                        (and (nil) " /*...*/
+            "(or (nil) (or (nil) (or (nil) (or (nil) (or (nil)" /*...*/
+                /* yes */
+            "(car (cons (yes) (cdr (cons (yes) (cons (yes) (nil))))))"
+            ")))))"
+            "))))";
+
+        interp_eval (out, str);
     }
-
-#elif 0
-    {push_function (run, "cat", 2);
-        {push_function (run, "cons", 2);
-            push_function (run, "yes", 0);
-            push_function (run, "nil", 0);
-        }
-        {push_function (run, "cat", 2);
-            {push_function (run, "cons", 2);
-                push_function (run, "nil", 0);
-                {push_function (run, "cons", 2);
-                    push_function (run, "nil", 0);
-                    push_function (run, "nil", 0);
-                }
-            }
-            {push_function (run, "cons", 2);
-                push_function (run, "yes", 0);
-                {push_function (run, "cons", 2);
-                    push_function (run, "yes", 0);
-                    {push_function (run, "cons", 2);
-                        push_function (run, "yes", 0);
-                        push_function (run, "nil", 0);
-                    }
-                }
-            }
-        }
-    }
-#elif 0
-    push_function (run, "cons", 2);
-    push_function (run, "cons", 2);
-    push_function (run, "yes", 0);
-    push_function (run, "nil", 0);
-    push_function (run, "cons", 2);
-    push_function (run, "yes", 0);
-    push_function (run, "cons", 2);
-    push_function (run, "yes", 0);
-    push_function (run, "cons", 2);
-    push_function (run, "yes", 0);
-
-    push_function (run, "and", 2);
-    push_function (run, "nil", 0);
-
-    push_function (run, "or", 2);
-    push_function (run, "nil", 0);
-    push_function (run, "or", 2);
-    push_function (run, "nil", 0);
-    push_function (run, "or", 2);
-    push_function (run, "nil", 0);
-    push_function (run, "or", 2);
-    push_function (run, "nil", 0);
-    push_function (run, "or", 2);
-    push_function (run, "nil", 0);
-    push_function (run, "or", 2);
-    push_function (run, "nil", 0);
-
-        /* yes */
-    push_function (run, "car", 1);
-    push_function (run, "cons", 2);
-    push_function (run, "yes", 0);
-    push_function (run, "cdr", 1);
-    push_function (run, "cons", 2);
-    push_function (run, "yes", 0);
-    push_function (run, "cons", 2);
-    push_function (run, "yes", 0);
-    push_function (run, "nil", 0);
 #endif
 
-    eval (run);
-
-    cleanup_lisp (run);
+    cleanup_lisp ();
     return 0;
 }
 
