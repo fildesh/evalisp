@@ -848,13 +848,18 @@ static unsigned parse_list (Array* arr, char* str)
 static void interp_deftype (const char* str)
 {
     unsigned i;
-    Array parsed;
+    TypeInfo info;
+    Array membs;
+    Array types;
     Pair* node;
+    Array parsed;
     char buf[1024];
     assert ( 1024 > strlen (str) );
     strcpy (buf, str);
 
     InitArray( Pair, parsed, 1 );
+    InitArray( Pair, membs, 1 );
+    InitArray( Pair, types, 1 );
     
     i = parse_list (&parsed, buf);
     assert (i && "Parse failed.");
@@ -864,7 +869,7 @@ static void interp_deftype (const char* str)
 
     node = ARef( Pair, parsed, 0 );
     assert (CALLBIT & node->key);
-    assert (3 == (~CALLBIT & node->key));
+    assert (2 == StripPKey(node->key));
 
     node = ARef( Pair, parsed, 1 );
     assert (!strcmp ("deftype", (char*)node->val));
@@ -872,7 +877,51 @@ static void interp_deftype (const char* str)
     node = ARef( Pair, parsed, 2 );
     assert (CALLBIT & node->key);
 
+    node = ARef( Pair, parsed, 3 );
+
+    info.name = (char*) node->val;
+
+    for (i = 4; i < parsed.n; ++i)
+    {
+        const char* membstr;
+        const char* typestr;
+        node = ARef( Pair, parsed, i );
+        if (CALLBIT & node->key)
+        {
+            unsigned nelems;
+            nelems = StripPKey(node->key);
+            assert (1 == nelems || 2 == nelems);
+
+            node = ARef( Pair, parsed, ++i );
+            assert (!(CALLBIT & node->key));
+            membstr = (char*) node->val;
+
+            node = ARef( Pair, parsed, ++i );
+
+            if (2 == nelems)
+                typestr = (char*) node->val;
+            else
+                typestr = "nil";
+        }
+        else
+        {
+            membstr = (char*) node->val;
+            typestr = "any";
+        }
+
+        dPushStack( const char*, membs, membstr );
+        dPushStack( pkey_t, types, ensure_named_type (typestr) );
+    }
+
+    assert (membs.n == types.n);
+    info.nmembs = types.n;
+    info.types = (pkey_t*) types.a;
+
+    add_simple_type (&info, (const char**) membs.a);
+
     free (parsed.a);
+    free (membs.a);
+    free (types.a);
 }
 
 static void interp_def (const char* str)
@@ -966,10 +1015,15 @@ int main ()
     init_lisp ();
         /* interp_def ("(def (or (a yes) (b)) (yes))"); */
 
+#if 1
+    interp_deftype ("(deftype (nil))");
+    interp_deftype ("(deftype (yes))");
+    interp_deftype ("(deftype (cons car (cdr list)))");
+#else
     {
         TypeInfo info;
-        pkey_t types[10];
         const char* membs[10];
+        pkey_t types[10];
 
         info.types = types;
 
@@ -988,6 +1042,12 @@ int main ()
         types[1] = ensure_named_type ("list");
         membs[1] = "cdr";
         add_simple_type (&info, membs);
+    }
+#endif
+
+    {
+        TypeInfo info;
+        pkey_t types[10];
 
         info.name = "list";
         info.nmembs = 2;
