@@ -847,7 +847,7 @@ static void interp_deftype (const char* str)
     assert (CALLBIT & node->key);
 
     node = ARef( Pair, parsed, 1 );
-    assert (!strcmp ("deftype", (char*)node->val));
+    assert (!strcmp ("'deftype", (char*)node->val));
 
     node = ARef( Pair, parsed, 2 );
     if (CALLBIT & node->key)
@@ -953,7 +953,7 @@ static void interp_def (const char* str)
     assert (2 == StripPKey(node->key) || 3 == StripPKey(node->key));
 
     node = ARef( Pair, parsed, 1 );
-    assert (!strcmp ("def", (char*) node->val));
+    assert (!strcmp ("'def", (char*) node->val));
 
     node = ARef( Pair, parsed, 2 );
         /* Don't support variable assignment yet.
@@ -1142,7 +1142,6 @@ static void interp_eval (FILE* out, const char* str)
     cleanup_runtime (run);
 }
 
-
 static void assert_eql (const char* lhs, const char* rhs)
 {
     Pair expr;
@@ -1208,12 +1207,12 @@ int main ()
     out = stdout;
     init_lisp ();
 
-    interp_deftype ("(deftype (nil))");
-    interp_deftype ("(deftype (yes))");
-    interp_deftype ("(deftype (cons car (cdr list)))");
+    interp_deftype ("('deftype (nil))");
+    interp_deftype ("('deftype (yes))");
+    interp_deftype ("('deftype (cons car (cdr list)))");
 
-    interp_deftype ("(deftype list cons nil)");
-    interp_deftype ("(deftype bool yes nil)");
+    interp_deftype ("('deftype list cons nil)");
+    interp_deftype ("('deftype bool yes nil)");
 
         /* Since pointers to /Named_Functions/ members are used,
          * don't resize the array after this block.
@@ -1228,51 +1227,51 @@ int main ()
     init_named_function ("rev");
     init_named_function ("map");
 
-    interp_def ("(def (or (a yes) (b yes)) (yes))");
-    interp_def ("(def (or (a yes) (b    )) (yes))");
-    interp_def ("(def (or (a    ) (b yes)) (yes))");
-    interp_def ("(def (or (a    ) (b    ))      )");
+    interp_def ("('def (or (a yes) (b yes)) (yes))");
+    interp_def ("('def (or (a yes) (b    )) (yes))");
+    interp_def ("('def (or (a    ) (b yes)) (yes))");
+    interp_def ("('def (or (a    ) (b    ))      )");
 
-    interp_def ("(def (and (a yes) (b yes)) (yes))");
-    interp_def ("(def (and (a yes) (b    ))      )");
-    interp_def ("(def (and (a    ) (b yes))      )");
-    interp_def ("(def (and (a    ) (b    ))      )");
+    interp_def ("('def (and (a yes) (b yes)) (yes))");
+    interp_def ("('def (and (a yes) (b    ))      )");
+    interp_def ("('def (and (a    ) (b yes))      )");
+    interp_def ("('def (and (a    ) (b    ))      )");
 
-    interp_def ("(def (impl (a yes) (b yes)) (yes))");
-    interp_def ("(def (impl (a yes) (b    ))      )");
-    interp_def ("(def (impl (a    ) (b yes)) (yes))");
-    interp_def ("(def (impl (a    ) (b    )) (yes))");
+    interp_def ("('def (impl (a yes) (b yes)) (yes))");
+    interp_def ("('def (impl (a yes) (b    ))      )");
+    interp_def ("('def (impl (a    ) (b yes)) (yes))");
+    interp_def ("('def (impl (a    ) (b    )) (yes))");
 
-    interp_def ("(def (eql (a yes) (b yes)) (yes))");
-    interp_def ("(def (eql (a yes) (b    ))      )");
-    interp_def ("(def (eql (a    ) (b yes))      )");
-    interp_def ("(def (eql (a    ) (b    )) (yes))");
+    interp_def ("('def (eql (a yes) (b yes)) (yes))");
+    interp_def ("('def (eql (a yes) (b    ))      )");
+    interp_def ("('def (eql (a    ) (b yes))      )");
+    interp_def ("('def (eql (a    ) (b    )) (yes))");
 
-    interp_def ("(def (not (a    )) (yes))");
-    interp_def ("(def (not (a yes))      )");
+    interp_def ("('def (not (a    )) (yes))");
+    interp_def ("('def (not (a yes))      )");
 
-    interp_def ("(def (eql (a cons) (b     )))");
-    interp_def ("(def (eql (a     ) (b cons)))");
-    interp_def ("(def (eql (a cons) (b cons))"
-                "  (and (eql (car a) (car b))"
-                "       (eql (cdr a) (cdr b))))");
+    interp_def ("('def (eql (a cons) (b     )))");
+    interp_def ("('def (eql (a     ) (b cons)))");
+    interp_def ("('def (eql (a cons) (b cons))"
+                " (and (eql (car a) (car b))"
+                "      (eql (cdr a) (cdr b))))");
 
-    interp_def ("(def (cat (a     ) (b list)) b)");
-    interp_def ("(def (cat (a cons) (b list))"
-                "  (cons (car a)"
-                "        (cat (cdr a) b)))");
+    interp_def ("('def (cat (a     ) (b list)) b)");
+    interp_def ("('def (cat (a cons) (b list))"
+                " (cons (car a)"
+                "       (cat (cdr a) b)))");
 
-    interp_def ("(def (list a) (cons a (nil)))");
+    interp_def ("('def (list a) (cons a (nil)))");
 
-    interp_def ("(def (rev (L)))");
-    interp_def ("(def (rev (L cons))"
-                "  (cat (rev (cdr L))"
-                "       (list (car L))))");
+    interp_def ("('def (rev (L)))");
+    interp_def ("('def (rev (L cons))"
+                " (cat (rev (cdr L))"
+                "      (list (car L))))");
 
-    interp_def ("(def (map (f func) (L)))");
-    interp_def ("(def (map (f func) (L cons))"
-                "  (cons (f (car L))"
-                "         (map f (cdr L))))");
+    interp_def ("('def (map (f func) (L)))");
+    interp_def ("('def (map (f func) (L cons))"
+                " (cons (f (car L))"
+                "        (map f (cdr L))))");
 
     test_cases (out);
 
