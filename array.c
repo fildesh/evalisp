@@ -72,12 +72,17 @@ static unsigned ARef_helper (const Array* arr, unsigned i)
 #define PopStack( Type, sk ) \
     (&dPopStack( Type, sk ))
 
-#define CleanupArray( Type, arr ) \
+#define ClearArray( Type, arr ) \
     do { \
         unsigned i; \
         for (i = 0; i < (arr).n; ++i)  cleanup_##Type (ARef(Type, arr, i)); \
-        free ((arr).a); \
         (arr).n = 0; \
+    } while (0)
+
+#define CleanupArray( Type, arr ) \
+    do { \
+        ClearArray( Type, arr ); \
+        free ((arr).a); \
         (arr).N = 0; \
         (arr).a = 0; \
     } while (0)

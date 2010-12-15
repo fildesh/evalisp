@@ -512,14 +512,10 @@ eval1 (Runtime* run)
     }
 }
 
-static
-    void
-eval (FILE* out, Runtime* run)
+static void eval (Runtime* run)
 {
     while (run->e.n)  eval1 (run);
     assert (1 == run->d.n);
-    write_Pair (out, ARef(Pair, run->d, 0));
-    fputs ("\n", out);
 }
 
 static FunctionSet* find_named_function (const char* name)
@@ -970,7 +966,7 @@ static void interp_def (const char* str)
     assert (3 == (~CALLBIT & node->key));
 
     node = ARef( Pair, parsed, 1 );
-    assert (!strcmp ("def", (char*)node->val));
+    assert (!strcmp ("def", (char*) node->val));
 
     node = ARef( Pair, parsed, 2 );
     assert (CALLBIT & node->key);
@@ -978,19 +974,14 @@ static void interp_def (const char* str)
     free (parsed.a);
 }
 
-static void interp_eval (FILE* out, const char* str)
+static void parse_to_runtime (Runtime* run, const char* str)
 {
     unsigned i;
     Array parsed;
     const unsigned N = 1;
-    Runtime stacked_run;
-    Runtime* run;
-
     char buf[4096];
     assert ( 4096 > strlen (str) );
     strcpy (buf, str);
-
-    run = &stacked_run;
 
     InitArray( Pair, run->d, N );
     InitArray( Pair, run->e, N );
@@ -1023,12 +1014,81 @@ static void interp_eval (FILE* out, const char* str)
             PushStack( Pair, run->e, &pair );
         }
     }
-    eval (out, run);
-
-    CleanupArray( Pair, run->d );
-    CleanupArray( Pair, run->e );
     free (parsed.a);
 }
+
+static void cleanup_runtime (Runtime* run)
+{
+    CleanupArray( Pair, run->d );
+    CleanupArray( Pair, run->e );
+}
+
+static void interp_eval (FILE* out, const char* str)
+{
+    Runtime stacked_run;
+    Runtime* run;
+    run = &stacked_run;
+
+    parse_to_runtime (run, str);
+
+    eval (run);
+    write_Pair (out, ARef(Pair, run->d, 0));
+    fputs ("\n", out);
+
+    cleanup_runtime (run);
+}
+
+
+static void assert_eql (const char* lhs, const char* rhs)
+{
+    Pair expr;
+    Runtime stacked_lhsrun;
+    Runtime stacked_rhsrun;
+    Runtime* lhsrun;
+    Runtime* rhsrun;
+    lhsrun = &stacked_lhsrun;
+    rhsrun = &stacked_rhsrun;
+
+    parse_to_runtime (lhsrun, lhs);
+    parse_to_runtime (rhsrun, rhs);
+
+    eval (lhsrun);
+    eval (rhsrun);
+
+    if (lhsrun->e.n < 3)
+        GrowArray(Pair, lhsrun->e, 3 - lhsrun->e.n);
+
+    expr.key = CALLBIT | 2;
+    expr.val = find_named_function ("eql");
+    copy_Pair (ARef( Pair, lhsrun->e, 0 ), &expr);
+    copy_Pair (ARef( Pair, lhsrun->e, 1 ), ARef( Pair, rhsrun->d, 0 ));
+    copy_Pair (ARef( Pair, lhsrun->e, 2 ), ARef( Pair, lhsrun->d, 0 ));
+    ClearArray( Pair, rhsrun->d );
+    ClearArray( Pair, lhsrun->d );
+    eval (lhsrun);
+
+    copy_Pair (&expr, ARef( Pair, lhsrun->d, 0 ));
+    assert (StripPKey(expr.key) == find_named_type ("yes"));
+
+    cleanup_runtime (lhsrun);
+    cleanup_runtime (rhsrun);
+}
+
+
+static void test_cases (FILE* out)
+{
+    assert_eql ("(nil)", "(map list (nil))");
+
+    assert_eql ("(cons (nil) (cons (yes) (list (nil))))",
+                "(map not (cons (yes) (cons (nil) (cons (yes) (nil))))))");
+
+    assert_eql ("(list (yes))",
+                "(car (list (list (yes)))))");
+
+    assert_eql ("(cons (nil) (list (yes)))",
+                "(rev (cons (yes) (cons (nil) (nil)))))");
+}
+
 
 int main ()
 {
@@ -1058,6 +1118,7 @@ int main ()
     init_named_function ("map");
 
     {
+        unsigned ti, ei, ai;
         Function f;
         pkey_t types[10];
         Pair exprs[20];
@@ -1130,6 +1191,67 @@ int main ()
         f.info.std.nsubst = 0;
         exprs[0].key = find_simple_type ("nil");
         add_named_function ("not", &f);
+
+            /* (def (eql (a cons) (b nil)) (nil)) */
+        ti = 0;  ei = 0;  ai = 0;
+        types[ti++] = find_named_type ("cons");
+        types[ti++] = find_named_type ("nil");
+        exprs[ei].key   = CALLBIT | 0;
+        exprs[ei++].val = find_named_function ("nil");
+        f.nargs = ti;
+        f.info.std.nexprs = ei;
+        f.info.std.nsubst = ai/2;
+        add_named_function ("eql", &f);
+
+            /* (def (eql (a nil) (b cons)) (nil)) */
+        ti = 0;  ei = 0;  ai = 0;
+        types[ti++] = find_named_type ("nil");
+        types[ti++] = find_named_type ("cons");
+        exprs[ei].key   = CALLBIT | 0;
+        exprs[ei++].val = find_named_function ("nil");
+        f.nargs = ti;
+        f.info.std.nexprs = ei;
+        f.info.std.nsubst = ai/2;
+        add_named_function ("eql", &f);
+
+            /* (def (eql (a cons) (b cons))
+             *   (and (eql (car a) (car b))
+             *        (eql (cdr a) (cdr b))))
+             */
+        ti = 0;  ei = 0;  ai = 0;
+        types[ti++] = find_named_type ("cons");
+        types[ti++] = find_named_type ("cons");
+        exprs[ei].key   = CALLBIT | 2;
+        exprs[ei++].val = find_named_function ("and");
+        exprs[ei].key   = CALLBIT | 2;
+        exprs[ei++].val = find_named_function ("eql");
+        exprs[ei].key   = CALLBIT | 1;
+        exprs[ei++].val = find_named_function ("car");
+        exprs[ei].key   = 0;
+        argmap[ai++] = ei++;
+        argmap[ai++] = 0;
+        exprs[ei].key   = CALLBIT | 1;
+        exprs[ei++].val = find_named_function ("car");
+        exprs[ei].key = 0;
+        argmap[ai++] = ei++;
+        argmap[ai++] = 1;
+        exprs[ei].key   = CALLBIT | 2;
+        exprs[ei++].val = find_named_function ("eql");
+        exprs[ei].key   = CALLBIT | 1;
+        exprs[ei++].val = find_named_function ("cdr");
+        exprs[ei].key   = 0;
+        argmap[ai++] = ei++;
+        argmap[ai++] = 0;
+        exprs[ei].key   = CALLBIT | 1;
+        exprs[ei++].val = find_named_function ("cdr");
+        exprs[ei].key = 0;
+        argmap[ai++] = ei++;
+        argmap[ai++] = 1;
+        f.nargs = ti;
+        f.info.std.nexprs = ei;
+        f.info.std.nsubst = ai/2;
+        add_named_function ("eql", &f);
+
 
             /* (def (cat (a nil) (b list)) b) */
         f.nargs = 2;
@@ -1260,26 +1382,12 @@ int main ()
         add_named_function ("map", &f);
     }
 
-#if 0
-#elif 0
-    interp_eval (out, "(map list (nil))");
+    test_cases (out);
 
+#if 0
 #elif 0
     interp_eval (out, "(list (yes))");
 
-#elif 1
-    {
-        const char* str =
-            "(map not (cons (yes) (cons (nil) (cons (yes) (nil)))))";
-        interp_eval (out, str);
-    }
-
-#elif 0
-    interp_eval (out, "(car (list (list (yes))))");
-
-#elif 0
-    interp_eval (out, "(rev (cons (yes) (cons (nil) (nil))))");
-        /* (cons (nil) (cons (yes) (nil))) */
 #elif 0
     {
         const char* str =
