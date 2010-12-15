@@ -358,8 +358,7 @@ eval1 (Runtime* run)
             /* How many args do you have, really? */
         assert (nargs == StripPKey( expr->key ));
 
-            /* Must have enough arguments. */
-        assert (run->d.n >= nargs);
+        assert (run->d.n >= nargs && "Not enough arguments.");
 
         run->d.n -= nargs;
         dsk = ARef( Pair, run->d, run->d.n );
@@ -703,22 +702,6 @@ static pkey_t find_named_type (const char* name)
     assert (0 && "Unknown type.");
 }
 
-static pkey_t find_simple_type (const char* name)
-{
-    unsigned i;
-    i = find_named_type (name);
-    assert (!(WILDBIT & ARef( TypeInfo, Named_Types, i )->nmembs));
-    return i;
-}
-
-static pkey_t find_compound_type (const char* name)
-{
-    unsigned i;
-    i = find_named_type (name);
-    assert (WILDBIT & ARef( TypeInfo, Named_Types, i )->nmembs);
-    return i;
-}
-
 static void push_function (Runtime* run, const char* name, pkey_t nargs)
 {
     Pair pair;
@@ -848,8 +831,7 @@ static void interp_deftype (const char* str)
     Array types;
     Pair* node;
     Array parsed;
-    char buf[1024];
-    assert ( 1024 > strlen (str) );
+    char* buf = malloc ((1+ strlen (str)) * sizeof(char));
     strcpy (buf, str);
 
     InitArray( Pair, parsed, 1 );
@@ -895,12 +877,15 @@ static void interp_deftype (const char* str)
                 assert (!(CALLBIT & node->key));
                 membstr = (char*) node->val;
 
-                node = ARef( Pair, parsed, ++i );
-
                 if (2 == nelems)
+                {
+                    node = ARef( Pair, parsed, ++i );
                     typestr = (char*) node->val;
+                }
                 else
+                {
                     typestr = "nil";
+                }
             }
             else
             {
@@ -940,18 +925,23 @@ static void interp_deftype (const char* str)
 
     free (parsed.a);
     free (types.a);
+    free (buf);
 }
 
 static void interp_def (const char* str)
 {
+    const unsigned formals_offset = 4;
+    const char* funcname;
     unsigned i;
-    Array parsed;
+    Function func;
+    Array parsed, types, formals, exprs, argmap;
     Pair* node;
-    char buf[1024];
-    assert ( 1024 > strlen (str) );
+    char* buf = malloc ((1+ strlen (str)) * sizeof(char));
     strcpy (buf, str);
 
-    InitArray( Pair, parsed, 1 );
+    InitArray( Pair,     parsed,  1 );
+    InitArray( Pair,     exprs,   1 );
+    InitArray( unsigned, argmap,  1 );
     
     i = parse_list (&parsed, buf);
     assert (i && "Parse failed.");
@@ -960,18 +950,131 @@ static void interp_def (const char* str)
 
     node = ARef( Pair, parsed, 0 );
     assert (CALLBIT & node->key);
-        /* Don't support variable assignment yet.
-         * Need more levels of scoping.
-         */
-    assert (3 == (~CALLBIT & node->key));
+    assert (2 == StripPKey(node->key) || 3 == StripPKey(node->key));
 
     node = ARef( Pair, parsed, 1 );
     assert (!strcmp ("def", (char*) node->val));
 
     node = ARef( Pair, parsed, 2 );
+        /* Don't support variable assignment yet.
+         * Need more levels of scoping.
+         */
     assert (CALLBIT & node->key);
+    func.nargs = StripPKey(node->key);
+    assert (func.nargs > 0);
+    -- func.nargs;
+
+    if (func.nargs > 0)
+    {
+        InitArray( pkey_t, types,   func.nargs );
+        InitArray( char*,  formals, func.nargs );
+    }
+
+    node = ARef( Pair, parsed, 3 );
+    assert (!(CALLBIT & node->key));
+    funcname = (char*) node->val;
+
+    for (i = formals_offset; types.n < func.nargs; ++i)
+    {
+        const char* typestr;
+        char* formalstr;
+        node = ARef( Pair, parsed, i );
+        if (CALLBIT & node->key)
+        {
+            unsigned nelems;
+            nelems = StripPKey(node->key);
+            assert (1 == nelems || 2 == nelems);
+
+            node = ARef( Pair, parsed, ++i );
+            assert (!(CALLBIT & node->key));
+            formalstr = (char*) node->val;
+
+            if (2 == nelems)
+            {
+                node = ARef( Pair, parsed, ++i );
+                typestr = (char*) node->val;
+            }
+            else
+            {
+                typestr = "nil";
+            }
+        }
+        else
+        {
+            typestr = "any";
+            formalstr = (char*) node->val;
+        }
+
+        dPushStack( pkey_t, types, find_named_type (typestr) );
+        dPushStack( char*, formals, formalstr );
+    }
+
+    for (; i < parsed.n; ++i)
+    {
+        unsigned argi;
+        const char* symname;
+        Pair expr;
+
+        node = ARef( Pair, parsed, i );
+        if (CALLBIT & node->key)
+        {
+            expr.key = StripPKey(node->key);
+            assert (expr.key > 0);
+            expr.key = CALLBIT | (expr.key - 1);
+
+            node = ARef( Pair, parsed, ++i );
+        }
+        else
+        {
+            expr.key = 0;
+        }
+
+        assert (!(CALLBIT & node->key));
+        symname = (char*) node->val;
+
+        for (argi = 0; argi < formals.n; ++argi)
+            if (0 == strcmp (symname, dARef( char*, formals, argi )))
+                break;
+
+        if (argi < formals.n)
+        {
+            dPushStack( unsigned, argmap, exprs.n );
+            dPushStack( unsigned, argmap, argi );
+        }
+        else
+        {
+            expr.val = find_named_function ((char*) node->val);
+            assert (expr.val && "Function not found.");
+        }
+
+        PushStack( Pair, exprs, &expr );
+    }
+
+    if (0 == exprs.n)
+    {
+        Pair expr;
+        expr.key = CALLBIT | 0;
+        expr.val = find_named_function ("nil");
+        PushStack( Pair, exprs, &expr );
+    }
+
+    func.types = (pkey_t*) types.a;
+    func.type = StandardFunc;
+    func.info.std.nexprs = exprs.n;
+    func.info.std.nsubst = argmap.n / 2;
+    func.info.std.exprs = (Pair*) exprs.a;
+    func.info.std.argmap = (unsigned*) argmap.a;
+    add_named_function (funcname, &func);
 
     free (parsed.a);
+    if (func.nargs > 0)
+    {
+        free (types.a);
+        free (formals.a);
+    }
+    free (exprs.a);
+    free (argmap.a);
+    free (buf);
 }
 
 static void parse_to_runtime (Runtime* run, const char* str)
@@ -979,8 +1082,7 @@ static void parse_to_runtime (Runtime* run, const char* str)
     unsigned i;
     Array parsed;
     const unsigned N = 1;
-    char buf[4096];
-    assert ( 4096 > strlen (str) );
+    char* buf = malloc ((1+ strlen (str)) * sizeof(char));
     strcpy (buf, str);
 
     InitArray( Pair, run->d, N );
@@ -1009,12 +1111,14 @@ static void parse_to_runtime (Runtime* run, const char* str)
         {
             Pair pair;
                 /* Assume it's a function for now. */
-            pair.key = find_simple_type ("func");
+            pair.key = find_named_type ("func");
             pair.val = find_named_function ((char*) node->val);
+            assert (pair.val && "Function not found.");
             PushStack( Pair, run->e, &pair );
         }
     }
     free (parsed.a);
+    free (buf);
 }
 
 static void cleanup_runtime (Runtime* run)
@@ -1077,7 +1181,15 @@ static void assert_eql (const char* lhs, const char* rhs)
 
 static void test_cases (FILE* out)
 {
-    assert_eql ("(nil)", "(map list (nil))");
+    (void) out;
+    assert_eql ("(yes)",
+                "(or (nil) (yes))");
+
+    assert_eql ("(cons (yes) (nil))",
+                "(list (yes))");
+
+    assert_eql ("(nil)",
+                "(map list (nil))");
 
     assert_eql ("(cons (nil) (cons (yes) (list (nil))))",
                 "(map not (cons (yes) (cons (nil) (cons (yes) (nil))))))");
@@ -1095,7 +1207,6 @@ int main ()
     FILE* out;
     out = stdout;
     init_lisp ();
-        /* interp_def ("(def (or (a yes) (b)) (yes))"); */
 
     interp_deftype ("(deftype (nil))");
     interp_deftype ("(deftype (yes))");
@@ -1117,277 +1228,55 @@ int main ()
     init_named_function ("rev");
     init_named_function ("map");
 
-    {
-        unsigned ti, ei, ai;
-        Function f;
-        pkey_t types[10];
-        Pair exprs[20];
-        unsigned argmap[20];
+    interp_def ("(def (or (a yes) (b yes)) (yes))");
+    interp_def ("(def (or (a yes) (b    )) (yes))");
+    interp_def ("(def (or (a    ) (b yes)) (yes))");
+    interp_def ("(def (or (a    ) (b    ))      )");
 
-        f.types = types;
-        f.info.std.exprs = exprs;
-        f.info.std.argmap = argmap;
+    interp_def ("(def (and (a yes) (b yes)) (yes))");
+    interp_def ("(def (and (a yes) (b    ))      )");
+    interp_def ("(def (and (a    ) (b yes))      )");
+    interp_def ("(def (and (a    ) (b    ))      )");
 
-        f.nargs = 2;
-        f.type = StandardFunc;
-        f.info.std.nexprs = 1;
-        f.info.std.nsubst = 0;
-        types[0] = find_simple_type ("yes");
-        types[1] = find_simple_type ("yes");
-        exprs[0].key = find_simple_type ("yes");
-        add_named_function ("and", &f);
-        exprs[0].key = find_simple_type ("yes");
-        add_named_function ("or", &f);
-        exprs[0].key = find_simple_type ("yes");
-        add_named_function ("impl", &f);
-        exprs[0].key = find_simple_type ("yes");
-        add_named_function ("eql", &f);
+    interp_def ("(def (impl (a yes) (b yes)) (yes))");
+    interp_def ("(def (impl (a yes) (b    ))      )");
+    interp_def ("(def (impl (a    ) (b yes)) (yes))");
+    interp_def ("(def (impl (a    ) (b    )) (yes))");
 
-        types[0] = find_simple_type ("yes");
-        types[1] = find_simple_type ("nil");
-        exprs[0].key = find_simple_type ("nil");
-        add_named_function ("and", &f);
-        exprs[0].key = find_simple_type ("yes");
-        add_named_function ("or", &f);
-        exprs[0].key = find_simple_type ("nil");
-        add_named_function ("impl", &f);
-        exprs[0].key = find_simple_type ("nil");
-        add_named_function ("eql", &f);
+    interp_def ("(def (eql (a yes) (b yes)) (yes))");
+    interp_def ("(def (eql (a yes) (b    ))      )");
+    interp_def ("(def (eql (a    ) (b yes))      )");
+    interp_def ("(def (eql (a    ) (b    )) (yes))");
 
-        types[0] = find_simple_type ("nil");
-        types[1] = find_simple_type ("yes");
-        exprs[0].key = find_simple_type ("nil");
-        add_named_function ("and", &f);
-        exprs[0].key = find_simple_type ("yes");
-        add_named_function ("or", &f);
-        exprs[0].key = find_simple_type ("yes");
-        add_named_function ("impl", &f);
-        exprs[0].key = find_simple_type ("nil");
-        add_named_function ("eql", &f);
+    interp_def ("(def (not (a    )) (yes))");
+    interp_def ("(def (not (a yes))      )");
 
-        types[0] = find_simple_type ("nil");
-        types[1] = find_simple_type ("nil");
-        exprs[0].key = find_simple_type ("nil");
-        add_named_function ("and", &f);
-        exprs[0].key = find_simple_type ("nil");
-        add_named_function ("or", &f);
-        exprs[0].key = find_simple_type ("yes");
-        add_named_function ("impl", &f);
-        exprs[0].key = find_simple_type ("yes");
-        add_named_function ("eql", &f);
+    interp_def ("(def (eql (a cons) (b     )))");
+    interp_def ("(def (eql (a     ) (b cons)))");
+    interp_def ("(def (eql (a cons) (b cons))"
+                "  (and (eql (car a) (car b))"
+                "       (eql (cdr a) (cdr b))))");
 
-            /* (def (not (a nil)) (yes)) */
-        f.nargs = 1;
-        types[0] = find_simple_type ("nil");
-        f.info.std.nexprs = 1;
-        f.info.std.nsubst = 0;
-        exprs[0].key = find_simple_type ("yes");
-        add_named_function ("not", &f);
+    interp_def ("(def (cat (a     ) (b list)) b)");
+    interp_def ("(def (cat (a cons) (b list))"
+                "  (cons (car a)"
+                "        (cat (cdr a) b)))");
 
-            /* (def (not (a yes)) (nil)) */
-        f.nargs = 1;
-        types[0] = find_simple_type ("yes");
-        f.info.std.nexprs = 1;
-        f.info.std.nsubst = 0;
-        exprs[0].key = find_simple_type ("nil");
-        add_named_function ("not", &f);
+    interp_def ("(def (list a) (cons a (nil)))");
 
-            /* (def (eql (a cons) (b nil)) (nil)) */
-        ti = 0;  ei = 0;  ai = 0;
-        types[ti++] = find_named_type ("cons");
-        types[ti++] = find_named_type ("nil");
-        exprs[ei].key   = CALLBIT | 0;
-        exprs[ei++].val = find_named_function ("nil");
-        f.nargs = ti;
-        f.info.std.nexprs = ei;
-        f.info.std.nsubst = ai/2;
-        add_named_function ("eql", &f);
+    interp_def ("(def (rev (L)))");
+    interp_def ("(def (rev (L cons))"
+                "  (cat (rev (cdr L))"
+                "       (list (car L))))");
 
-            /* (def (eql (a nil) (b cons)) (nil)) */
-        ti = 0;  ei = 0;  ai = 0;
-        types[ti++] = find_named_type ("nil");
-        types[ti++] = find_named_type ("cons");
-        exprs[ei].key   = CALLBIT | 0;
-        exprs[ei++].val = find_named_function ("nil");
-        f.nargs = ti;
-        f.info.std.nexprs = ei;
-        f.info.std.nsubst = ai/2;
-        add_named_function ("eql", &f);
-
-            /* (def (eql (a cons) (b cons))
-             *   (and (eql (car a) (car b))
-             *        (eql (cdr a) (cdr b))))
-             */
-        ti = 0;  ei = 0;  ai = 0;
-        types[ti++] = find_named_type ("cons");
-        types[ti++] = find_named_type ("cons");
-        exprs[ei].key   = CALLBIT | 2;
-        exprs[ei++].val = find_named_function ("and");
-        exprs[ei].key   = CALLBIT | 2;
-        exprs[ei++].val = find_named_function ("eql");
-        exprs[ei].key   = CALLBIT | 1;
-        exprs[ei++].val = find_named_function ("car");
-        exprs[ei].key   = 0;
-        argmap[ai++] = ei++;
-        argmap[ai++] = 0;
-        exprs[ei].key   = CALLBIT | 1;
-        exprs[ei++].val = find_named_function ("car");
-        exprs[ei].key = 0;
-        argmap[ai++] = ei++;
-        argmap[ai++] = 1;
-        exprs[ei].key   = CALLBIT | 2;
-        exprs[ei++].val = find_named_function ("eql");
-        exprs[ei].key   = CALLBIT | 1;
-        exprs[ei++].val = find_named_function ("cdr");
-        exprs[ei].key   = 0;
-        argmap[ai++] = ei++;
-        argmap[ai++] = 0;
-        exprs[ei].key   = CALLBIT | 1;
-        exprs[ei++].val = find_named_function ("cdr");
-        exprs[ei].key = 0;
-        argmap[ai++] = ei++;
-        argmap[ai++] = 1;
-        f.nargs = ti;
-        f.info.std.nexprs = ei;
-        f.info.std.nsubst = ai/2;
-        add_named_function ("eql", &f);
-
-
-            /* (def (cat (a nil) (b list)) b) */
-        f.nargs = 2;
-        types[0] = find_simple_type ("nil");
-        types[1] = find_compound_type ("list");
-        f.info.std.nexprs = 1;
-        f.info.std.nsubst = 1;
-        exprs[0].key = 0;
-        argmap[0] = 0;
-        argmap[1] = 1;
-        add_named_function ("cat", &f);
-
-            /* (def (cat (a cons) (b list))
-             *   (cons (car a)
-             *         (cat (cdr a) b)))
-             */
-        f.nargs = 2;
-        types[0] = find_simple_type ("cons");
-        types[1] = find_compound_type ("list");
-        f.info.std.nexprs = 7;
-        f.info.std.nsubst = 3;
-        exprs[0].key = CALLBIT | 2;
-        exprs[0].val = find_named_function ("cons");
-        exprs[1].key = CALLBIT | 1;
-        exprs[1].val = find_named_function ("car");
-        exprs[2].key = 0;
-        argmap[0] = 2;
-        argmap[1] = 0;
-        exprs[3].key = CALLBIT | 2;
-        exprs[3].val = find_named_function ("cat");
-        exprs[4].key = CALLBIT | 1;
-        exprs[4].val = find_named_function ("cdr");
-        exprs[5].key = 0;
-        argmap[2] = 5;
-        argmap[3] = 0;
-        exprs[6].key = 0;
-        argmap[4] = 6;
-        argmap[5] = 1;
-        add_named_function ("cat", &f);
-
-            /* (def (list a)
-             *   (cons a nil))
-             */
-        f.nargs = 1;
-        types[0] = find_compound_type ("any");
-        f.info.std.nexprs = 3;
-        f.info.std.nsubst = 1;
-        exprs[0].key = CALLBIT | 2;
-        exprs[0].val = find_named_function ("cons");
-        exprs[1].key = 0;
-        argmap[0] = 1;
-        argmap[1] = 0;
-        exprs[2].key = find_simple_type ("nil");
-        add_named_function ("list", &f);
-         
-            /* (def (rev (a))) */
-        f.nargs = 1;
-        types[0] = find_simple_type ("nil");
-        f.info.std.nexprs = 1;
-        f.info.std.nsubst = 0;
-        exprs[0].key = find_simple_type ("nil");
-        add_named_function ("rev", &f);
-
-            /* (def (rev (a cons))
-             *   (cat (rev (cdr a))
-             *        (list (car a))))
-             */
-        f.nargs = 1;
-        types[0] = find_simple_type ("cons");
-        f.info.std.nexprs = 7;
-        f.info.std.nsubst = 2;
-        exprs[0].key = CALLBIT | 2;
-        exprs[0].val = find_named_function ("cat");
-        exprs[1].key = CALLBIT | 1;
-        exprs[1].val = find_named_function ("rev");
-        exprs[2].key = CALLBIT | 1;
-        exprs[2].val = find_named_function ("cdr");
-        exprs[3].key = 0;
-        argmap[0] = 3;
-        argmap[1] = 0;
-        exprs[4].key = CALLBIT | 1;
-        exprs[4].val = find_named_function ("list");
-        exprs[5].key = CALLBIT | 1;
-        exprs[5].val = find_named_function ("car");
-        exprs[6].key = 0;
-        argmap[2] = 6;
-        argmap[3] = 0;
-        add_named_function ("rev", &f);
-
-            /* (def (map (f func) (L nil))) */
-        f.nargs = 2;
-        types[0] = find_simple_type ("func");
-        types[1] = find_simple_type ("nil");
-        f.info.std.nexprs = 1;
-        f.info.std.nsubst = 0;
-        exprs[0].key = find_simple_type ("nil");
-        add_named_function ("map", &f);
-
-            /* (def (map (f func) (L cons))
-             *   (cons (f (car L))
-             *         (map f (cdr L)))
-             */
-        f.nargs = 2;
-        types[0] = find_simple_type ("func");
-        types[1] = find_simple_type ("cons");
-        f.info.std.nexprs = 8;
-        f.info.std.nsubst = 4;
-        exprs[0].key = CALLBIT | 2;
-        exprs[0].val = find_named_function ("cons");
-        exprs[1].key = CALLBIT | 1;
-        argmap[0] = 1;
-        argmap[1] = 0;
-        exprs[2].key = CALLBIT | 1;
-        exprs[2].val = find_named_function ("car");
-        exprs[3].key = 0;
-        argmap[2] = 3;
-        argmap[3] = 1;
-        exprs[4].key = CALLBIT | 2;
-        exprs[4].val = find_named_function ("map");
-        exprs[5].key = 0;
-        argmap[4] = 5;
-        argmap[5] = 0;
-        exprs[6].key = CALLBIT | 1;
-        exprs[6].val = find_named_function ("cdr");
-        exprs[7].key = 0;
-        argmap[6] = 7;
-        argmap[7] = 1;
-        add_named_function ("map", &f);
-    }
+    interp_def ("(def (map (f func) (L)))");
+    interp_def ("(def (map (f func) (L cons))"
+                "  (cons (f (car L))"
+                "         (map f (cdr L))))");
 
     test_cases (out);
 
 #if 0
-#elif 0
-    interp_eval (out, "(list (yes))");
-
 #elif 0
     {
         const char* str =
