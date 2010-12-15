@@ -849,7 +849,6 @@ static void interp_deftype (const char* str)
 {
     unsigned i;
     TypeInfo info;
-    Array membs;
     Array types;
     Pair* node;
     Array parsed;
@@ -858,7 +857,6 @@ static void interp_deftype (const char* str)
     strcpy (buf, str);
 
     InitArray( Pair, parsed, 1 );
-    InitArray( Pair, membs, 1 );
     InitArray( Pair, types, 1 );
     
     i = parse_list (&parsed, buf);
@@ -869,58 +867,82 @@ static void interp_deftype (const char* str)
 
     node = ARef( Pair, parsed, 0 );
     assert (CALLBIT & node->key);
-    assert (2 == StripPKey(node->key));
 
     node = ARef( Pair, parsed, 1 );
     assert (!strcmp ("deftype", (char*)node->val));
 
     node = ARef( Pair, parsed, 2 );
-    assert (CALLBIT & node->key);
-
-    node = ARef( Pair, parsed, 3 );
-
-    info.name = (char*) node->val;
-
-    for (i = 4; i < parsed.n; ++i)
+    if (CALLBIT & node->key)
     {
-        const char* membstr;
-        const char* typestr;
-        node = ARef( Pair, parsed, i );
-        if (CALLBIT & node->key)
+        Array membs;
+        InitArray( Pair, membs, 1 );
+
+        node = ARef( Pair, parsed, 0 );
+        assert (2 == StripPKey(node->key));
+
+        node = ARef( Pair, parsed, 3 );
+
+        info.name = (char*) node->val;
+
+        for (i = 4; i < parsed.n; ++i)
         {
-            unsigned nelems;
-            nelems = StripPKey(node->key);
-            assert (1 == nelems || 2 == nelems);
+            const char* membstr;
+            const char* typestr;
+            node = ARef( Pair, parsed, i );
+            if (CALLBIT & node->key)
+            {
+                unsigned nelems;
+                nelems = StripPKey(node->key);
+                assert (1 == nelems || 2 == nelems);
 
-            node = ARef( Pair, parsed, ++i );
-            assert (!(CALLBIT & node->key));
-            membstr = (char*) node->val;
+                node = ARef( Pair, parsed, ++i );
+                assert (!(CALLBIT & node->key));
+                membstr = (char*) node->val;
 
-            node = ARef( Pair, parsed, ++i );
+                node = ARef( Pair, parsed, ++i );
 
-            if (2 == nelems)
-                typestr = (char*) node->val;
+                if (2 == nelems)
+                    typestr = (char*) node->val;
+                else
+                    typestr = "nil";
+            }
             else
-                typestr = "nil";
-        }
-        else
-        {
-            membstr = (char*) node->val;
-            typestr = "any";
+            {
+                membstr = (char*) node->val;
+                typestr = "any";
+            }
+
+            dPushStack( const char*, membs, membstr );
+            dPushStack( pkey_t, types, ensure_named_type (typestr) );
         }
 
-        dPushStack( const char*, membs, membstr );
-        dPushStack( pkey_t, types, ensure_named_type (typestr) );
+        assert (membs.n == types.n);
+        info.nmembs = types.n;
+        info.types = (pkey_t*) types.a;
+
+        add_simple_type (&info, (const char**) membs.a);
+
+        free (membs.a);
+    }
+    else
+    {
+        info.name = (char*) node->val;
+
+        for (i = 3; i < parsed.n; ++i)
+        {
+            const char* typestr;
+            node = ARef( Pair, parsed, i );
+            assert (!(CALLBIT & node->key));
+            typestr = (char*) node->val;
+            dPushStack( pkey_t, types, ensure_named_type (typestr) );
+        }
+
+        info.nmembs = types.n;
+        info.types = types.a;
+        add_compound_type (&info);
     }
 
-    assert (membs.n == types.n);
-    info.nmembs = types.n;
-    info.types = (pkey_t*) types.a;
-
-    add_simple_type (&info, (const char**) membs.a);
-
     free (parsed.a);
-    free (membs.a);
     free (types.a);
 }
 
@@ -1015,54 +1037,12 @@ int main ()
     init_lisp ();
         /* interp_def ("(def (or (a yes) (b)) (yes))"); */
 
-#if 1
     interp_deftype ("(deftype (nil))");
     interp_deftype ("(deftype (yes))");
     interp_deftype ("(deftype (cons car (cdr list)))");
-#else
-    {
-        TypeInfo info;
-        const char* membs[10];
-        pkey_t types[10];
 
-        info.types = types;
-
-        info.name = "nil";
-        info.nmembs = 0;
-        add_simple_type (&info, 0);
-
-        info.name = "yes";
-        info.nmembs = 0;
-        add_simple_type (&info, 0);
-
-        info.name = "cons";
-        info.nmembs = 2;
-        types[0] = find_named_type ("any");
-        membs[0] = "car";
-        types[1] = ensure_named_type ("list");
-        membs[1] = "cdr";
-        add_simple_type (&info, membs);
-    }
-#endif
-
-    {
-        TypeInfo info;
-        pkey_t types[10];
-
-        info.name = "list";
-        info.nmembs = 2;
-        info.types = types;
-        types[0] = find_simple_type ("cons");
-        types[1] = find_simple_type ("nil");
-        add_compound_type (&info);
-
-        info.name = "bool";
-        info.nmembs = 2;
-        info.types = types;
-        types[0] = find_simple_type ("yes");
-        types[1] = find_simple_type ("nil");
-        add_compound_type (&info);
-    }
+    interp_deftype ("(deftype list cons nil)");
+    interp_deftype ("(deftype bool yes nil)");
 
         /* Since pointers to /Named_Functions/ members are used,
          * don't resize the array after this block.
