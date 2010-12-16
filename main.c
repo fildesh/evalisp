@@ -84,7 +84,7 @@ typedef struct function_struct Function;
 struct named_function_set_struct
 {
     char* name;
-    FunctionSet a; /* Array of functions. */
+    FunctionSet* a; /* Array of functions. */
 };
 typedef struct named_function_set_struct NamedFunctionSet;
 
@@ -526,7 +526,7 @@ static FunctionSet* find_named_function (const char* name)
         fs = ARef(NamedFunctionSet, Named_Functions, i);
         if (0 == strcmp (fs->name, name))
         {
-            return &fs->a;
+            return fs->a;
         }
     }
     return 0;
@@ -568,7 +568,8 @@ static void cleanup_Function (Function* f)
 static void cleanup_NamedFunctionSet (NamedFunctionSet* set)
 {
     free (set->name);
-    CleanupArray( Function, set->a );
+    CleanupArray( Function, *set->a );
+    free (set->a);
 }
 
 static void cleanup_TypeInfo (TypeInfo* info)
@@ -590,31 +591,30 @@ static void reverse_types (unsigned ntypes, pkey_t* types)
     }
 }
 
-static void force_init_named_function (const char* name)
+static FunctionSet* force_init_named_function (const char* name)
 {
     NamedFunctionSet set;
     set.name = MemDup(char, name, 1+strlen(name));
-    InitArray(Function, set.a, 1);
+    set.a = (FunctionSet*) malloc (sizeof (FunctionSet));
+    InitArray(Function, *set.a, 1);
     PushStack(NamedFunctionSet, Named_Functions, &set);
+    return ARefLast( NamedFunctionSet, Named_Functions )->a;
 }
 
-static void init_named_function (const char* name)
+static FunctionSet* ensure_named_function (const char* name)
 {
     FunctionSet* fs;
     fs = find_named_function (name);
-    if (!fs)  force_init_named_function (name);
+    if (!fs)  fs = force_init_named_function (name);
+    return fs;
 }
 
 static Function* add_named_function (const char* name, const Function* f)
 {
     FunctionSet* fs;
     Function* f_new;
-    fs = find_named_function (name);
-    if (!fs)
-    {
-        force_init_named_function (name);
-        fs = &ARefLast( NamedFunctionSet, Named_Functions )->a;
-    }
+    fs = ensure_named_function (name);
+
     GrowArray(Function, *fs, 1);
     f_new = ARefLast( Function, *fs );
     copy_Function (f_new, f);
@@ -704,11 +704,11 @@ static pkey_t find_named_type (const char* name)
 
 static void push_function (Runtime* run, const char* name, pkey_t nargs)
 {
-    Pair pair;
-
-    pair.key = CALLBIT | nargs;
-    pair.val = find_named_function (name);
-    PushStack( Pair, run->e, &pair );
+    Pair expr;
+    expr.key = CALLBIT | nargs;
+    expr.val = find_named_function (name);
+    assert (expr.val && "Function not found.");
+    PushStack( Pair, run->e, &expr );
 }
 
 static void init_lisp ()
@@ -1055,6 +1055,7 @@ static void interp_def (const char* str)
         Pair expr;
         expr.key = CALLBIT | 0;
         expr.val = find_named_function ("nil");
+        assert (expr.val && "Function not found.");
         PushStack( Pair, exprs, &expr );
     }
 
@@ -1163,6 +1164,7 @@ static void assert_eql (const char* lhs, const char* rhs)
 
     expr.key = CALLBIT | 2;
     expr.val = find_named_function ("eql");
+    assert (expr.val && "Function not found.");
     copy_Pair (ARef( Pair, lhsrun->e, 0 ), &expr);
     copy_Pair (ARef( Pair, lhsrun->e, 1 ), ARef( Pair, rhsrun->d, 0 ));
     copy_Pair (ARef( Pair, lhsrun->e, 2 ), ARef( Pair, lhsrun->d, 0 ));
@@ -1191,13 +1193,13 @@ static void test_cases (FILE* out)
                 "(map list (nil))");
 
     assert_eql ("(cons (nil) (cons (yes) (list (nil))))",
-                "(map not (cons (yes) (cons (nil) (cons (yes) (nil))))))");
+                "(map not (cons (yes) (cons (nil) (cons (yes) (nil)))))");
 
     assert_eql ("(list (yes))",
-                "(car (list (list (yes)))))");
+                "(car (list (list (yes))))");
 
     assert_eql ("(cons (nil) (list (yes)))",
-                "(rev (cons (yes) (cons (nil) (nil)))))");
+                "(rev (cons (yes) (cons (nil) (nil))))");
 }
 
 
@@ -1213,19 +1215,6 @@ int main ()
 
     interp_deftype ("('deftype list cons nil)");
     interp_deftype ("('deftype bool yes nil)");
-
-        /* Since pointers to /Named_Functions/ members are used,
-         * don't resize the array after this block.
-         */
-    init_named_function ("and");
-    init_named_function ("or");
-    init_named_function ("impl");
-    init_named_function ("eql");
-    init_named_function ("not");
-    init_named_function ("list");
-    init_named_function ("cat");
-    init_named_function ("rev");
-    init_named_function ("map");
 
     interp_def ("('def (or (a yes) (b yes)) (yes))");
     interp_def ("('def (or (a yes) (b    )) (yes))");
