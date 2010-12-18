@@ -41,7 +41,7 @@ enum function_type_enum
 {
     StandardFunc, InternalFunc,
     ConstructFunc, AccessFunc,
-    MultiFunc,
+    PendingDefFunc, SetOfFunc,
     NFuncTypes
 };
 typedef enum function_type_enum FunctionType;
@@ -74,6 +74,10 @@ struct function_struct
         {
             unsigned idx;
         } access;
+        struct function_struct_pending_case
+        {
+            Array parsed;
+        } pending;
         struct function_struct_multi_case
         {
             FunctionSet funcs;
@@ -118,25 +122,58 @@ static const TypeInfo* type_info (pkey_t type)
     return ARef( TypeInfo, Named_Types, type );
 }
 
-static int compound_type_p (pkey_t typei)
+static int mutableP (const Pair* pair)
 {
-    TypeInfo* info;
-    info = ARef( TypeInfo, Named_Types, typei );
-    return WILDBIT & info->nmembs && info->types;
+    return !!(MUTABIT & pair->key);
 }
 
-static int internal_type_p (pkey_t typei)
+static void set_mutable_P (Pair* pair, int b)
+{
+    if (b)  pair->key |=  MUTABIT;
+    else    pair->key &= ~MUTABIT;
+}
+
+static int funcallP (const Pair* pair)
+{
+    return !!(CALLBIT & pair->key);
+}
+
+static void set_funcall_P (Pair* pair, int b)
+{
+    if (b)  pair->key |=  CALLBIT;
+    else    pair->key &= ~CALLBIT;
+}
+
+static int simple_type_P (const TypeInfo* info)
+{
+    return !(WILDBIT & info->nmembs);
+}
+
+static void set_simple_type_P (TypeInfo* info, int b)
+{
+    if (b)  info->nmembs &= WILDBIT;
+    else    info->nmembs |= WILDBIT;
+}
+
+static int compound_type_P (pkey_t typei)
 {
     TypeInfo* info;
     info = ARef( TypeInfo, Named_Types, typei );
-    return WILDBIT & info->nmembs && !info->types;
+    return !simple_type_P (info) && info->types;
+}
+
+static int internal_type_P (pkey_t typei)
+{
+    TypeInfo* info;
+    info = ARef( TypeInfo, Named_Types, typei );
+    return !simple_type_P (info) && !info->types;
 }
 
 static const InternalTypeInfo* internal_type_info (pkey_t typei)
 {
     TypeInfo* info;
     unsigned i;
-    assert (internal_type_p (typei));
+    assert (internal_type_P (typei));
     info = ARef( TypeInfo, Named_Types, typei );
     i = (unsigned) StripWildBit(info->nmembs);
     return ARef( InternalTypeInfo, Internal_Types, i );
@@ -154,7 +191,7 @@ static
 write_Pair (FILE* out, const Pair* pair)
 {
     pkey_t type;
-    if (CALLBIT & pair->key)
+    if (funcallP (pair))
         type = FunctionInternalType;
     else
         type = StripPKey(pair->key);
@@ -273,19 +310,19 @@ copy_Pair (Pair* dst, const Pair* src)
     pkey_t type;
     type = StripPKey(src->key);
     assert (type < Named_Types.n);
-    if (internal_type_p (type))
+    if (internal_type_P (type))
     {
         const InternalTypeInfo* info;
 
         info = internal_type_info (type);
         if (info->copy_fn)
         {
-            dst->key = MUTABIT & src->key;
+            dst->key = mutableP (src);
             dst->val = (*info->copy_fn) (src->val);
         }
         else
         {
-            assert (!(MUTABIT & src->key));
+            assert (!mutableP (src));
             assert (!info->free_fn);
             set_pair (dst, src);
         }
@@ -296,14 +333,14 @@ copy_Pair (Pair* dst, const Pair* src)
         info = type_info (type);
         if (!info->nmembs)
         {
-            assert (!(MUTABIT & src->key));
+            assert (!mutableP (src));
             set_pair (dst, src);
         }
         else
         {
             unsigned i;
             dst->key = MUTABIT | type;
-            dst->val = malloc (info->nmembs * sizeof(Pair));
+            dst->val = AllocT( Pair, info->nmembs );
 
             src = (Pair*) src->val;
             dst = (Pair*) dst->val;
@@ -315,16 +352,16 @@ copy_Pair (Pair* dst, const Pair* src)
 
 static
     int
-typeofp (pkey_t a, pkey_t t)
+typeofP (pkey_t a, pkey_t t)
 {
     TypeInfo* info;
-    assert (!compound_type_p (a)
+    assert (!compound_type_P (a)
             && "Why check for compound type 'is a' compound type?");
 
     if (AnyType == t)  return 1;
 
     info = ARef( TypeInfo, Named_Types, t );
-    if (compound_type_p (t))
+    if (compound_type_P (t))
     {
         unsigned i, ntypes;
         ntypes = StripWildBit(info->nmembs);
@@ -348,7 +385,7 @@ find_function (unsigned nargs, const Pair* args, const FunctionSet* fset)
         if (nargs != func->nargs)
             continue;
         for (j = 0; j < nargs; ++j)
-            if (!typeofp (StripPKey(args[j].key), func->types[j]))
+            if (!typeofP (StripPKey(args[j].key), func->types[j]))
                 break;
         if (j == nargs)
             return func;
@@ -364,7 +401,7 @@ eval1 (Runtime* run)
 
     expr = PopStack( Pair, run->e );
 
-    if (CALLBIT & expr->key)
+    if (funcallP (expr))
     {
         unsigned i;
         unsigned nargs;
@@ -432,7 +469,7 @@ eval1 (Runtime* run)
                 src_idx = argmap[2*i+1];
                 assert (dst_idx < nexprs);
                 assert (src_idx < nargs);
-                if (!(CALLBIT & esk[dst_idx].key))
+                if (!funcallP (&esk[dst_idx]))
                     esk[dst_idx].key = dsk[src_idx].key;
                 esk[dst_idx].val = dsk[src_idx].val;
             }
@@ -440,7 +477,7 @@ eval1 (Runtime* run)
             for (i = 0; i < f->nargs; ++i)
             {
                 unsigned j, min_dst;
-                if (!(MUTABIT & dsk[i].key))  continue;
+                if (!mutableP (&dsk[i]))  continue;
                 min_dst = nexprs;
                 for (j = 0; j < nsubst; ++j)
                 {
@@ -448,12 +485,12 @@ eval1 (Runtime* run)
                     if (i != argmap[2*j+1])  continue;
                     dst_idx = argmap[2*j];
                     if (dst_idx < min_dst)  min_dst = dst_idx;
-                    esk[dst_idx].key &= ~MUTABIT;
+                    set_mutable_P (&esk[dst_idx], 0);
                 }
                 if (min_dst == nexprs)
                     cleanup_Pair (&dsk[i]);
                 else
-                    esk[min_dst].key |= MUTABIT;
+                    set_mutable_P (&esk[min_dst], 1);
             }
         }
         else if (InternalFunc == f->type)
@@ -471,16 +508,17 @@ eval1 (Runtime* run)
 
             if (f->nargs)
             {
-                val = (Pair*) malloc (f->nargs * sizeof (Pair));
+                val = AllocT( Pair, f->nargs );
                     /* This is a function to construct a type. */
                 for (i = 0; i < f->nargs; ++i)
                 {
-                    if (MUTABIT & dsk[i].key)
+                    if (mutableP (&dsk[i]))
                         set_pair (&val[i], &dsk[i]);
                     else
                         copy_Pair (&val[i], &dsk[i]);
                 }
-                dsk[0].key = MUTABIT | f->info.construct.type;
+                dsk[0].key = f->info.construct.type;
+                set_mutable_P (&dsk[0], 1);
             }
             else
             {
@@ -505,7 +543,7 @@ eval1 (Runtime* run)
             assert (get_idx < nmembs);
             membs = (Pair*) dsk->val;
 
-            if (MUTABIT & tmp.key)
+            if (mutableP (&tmp))
             {
                 set_pair (dsk, &membs[get_idx]);
                 for (i = 0; i < nmembs; ++i)
@@ -565,12 +603,14 @@ static void copy_Function (Function* dst, const Function* src)
     }
 }
 
+#if 0
 static void copy_TypeInfo (TypeInfo* dst, const TypeInfo* src)
 {
     dst->name   = MemDup( char, src->name, 1+strlen(src->name) );
     dst->nmembs = src->nmembs;
     dst->types  = MemDup( pkey_t, src->types, StripWildBit(src->nmembs) );
 }
+#endif
 
 static void cleanup_Function (Function* f)
 {
@@ -613,7 +653,7 @@ static FunctionSet* force_init_named_function (const char* name)
 {
     NamedFunctionSet set;
     set.name = MemDup(char, name, 1+strlen(name));
-    set.a = (FunctionSet*) malloc (sizeof (FunctionSet));
+    set.a = AllocT( FunctionSet, 1 );
     InitArray(Function, *set.a, 1);
     PushStack(NamedFunctionSet, Named_Functions, &set);
     return ARefLast( NamedFunctionSet, Named_Functions )->a;
@@ -659,7 +699,8 @@ static pkey_t ensure_named_type (const char* name)
     GrowArray( TypeInfo, Named_Types, 1 );
     info = ARefLast( TypeInfo, Named_Types );
     info->name = MemDup( char, name, 1+strlen(name) );
-    info->nmembs = WILDBIT;
+    info->nmembs = 0;
+    set_simple_type_P (info, 0);
     info->types = &ScratchPKey;
     return i;
 }
@@ -673,7 +714,6 @@ static pkey_t add_simple_type (const TypeInfo* src, const char* const* membs)
 
     type = ensure_named_type (src->name);
     dst = ARef( TypeInfo, Named_Types, type );
-    assert (WILDBIT == dst->nmembs);
 
     f.nargs = src->nmembs;
     f.types = src->types;
@@ -694,7 +734,7 @@ static pkey_t add_simple_type (const TypeInfo* src, const char* const* membs)
         add_named_function (membs[i], &f);
     }
 
-    assert (!compound_type_p (type) && !internal_type_p (type));
+    assert (!compound_type_P (type) && !internal_type_P (type));
     return type;
 }
 
@@ -705,12 +745,12 @@ static pkey_t add_compound_type (const TypeInfo* src)
 
     type = ensure_named_type (src->name);
     dst = ARef( TypeInfo, Named_Types, type );
-    assert (WILDBIT == dst->nmembs);
 
-    dst->nmembs = WILDBIT | src->nmembs;
+    dst->nmembs = src->nmembs;
+    set_simple_type_P (dst, 0);
     dst->types  = MemDup(pkey_t, src->types, src->nmembs);
     
-    assert (compound_type_p (type));
+    assert (compound_type_P (type));
     return type;
 }
 
@@ -722,10 +762,11 @@ add_internal_type (const char* name, const InternalTypeInfo* iinfo)
     TypeInfo* info;
     typei = ensure_named_type (name);
     info = ARef( TypeInfo, Named_Types, typei );
-    info->nmembs = WILDBIT | Internal_Types.n;
+    info->nmembs = Internal_Types.n;
+    set_simple_type_P (info, 0);
     info->types = 0;
     PushStack( InternalTypeInfo, Internal_Types, iinfo );
-    assert (internal_type_p (typei));
+    assert (internal_type_P (typei));
     return typei;
 }
 
@@ -741,7 +782,8 @@ static pkey_t find_named_type (const char* name)
 static void push_function (Runtime* run, const char* name, pkey_t nargs)
 {
     Pair expr;
-    expr.key = CALLBIT | nargs;
+    expr.key = nargs;
+    set_funcall_P (&expr, 1);
     expr.val = find_named_function (name);
     assert (expr.val && "Function not found.");
     PushStack( Pair, run->e, &expr );
@@ -760,7 +802,8 @@ static void init_lisp ()
         TypeInfo* info;
         typei = ensure_named_type ("any");
         info = ARef( TypeInfo, Named_Types, typei );
-        info->nmembs = WILDBIT;
+        info->nmembs = 0;
+        set_simple_type_P (info, 0);
         assert (AnyType == typei);
     }
 
@@ -842,7 +885,8 @@ static unsigned parse_list (Array* arr, char* str)
     if (diff)
     {
         Pair* fntok = ARef( Pair, *arr, toki );
-        fntok->key = CALLBIT | nmemb;
+        fntok->key = nmemb;
+        set_funcall_P (fntok, 1);
         fntok->val = (void*) (arr->n - (size_t) fntok->val);
     }
     else
@@ -861,8 +905,8 @@ static void interp_deftype (const char* str)
     Array types;
     Pair* node;
     Array parsed;
-    char* buf = malloc ((1+ strlen (str)) * sizeof(char));
-    strcpy (buf, str);
+    char* buf;
+    buf = MemDup( char, str, 1+ strlen (str) );
 
     InitArray( Pair, parsed, 1 );
     InitArray( Pair, types, 1 );
@@ -874,13 +918,13 @@ static void interp_deftype (const char* str)
     assert (parsed.n > 1);
 
     node = ARef( Pair, parsed, 0 );
-    assert (CALLBIT & node->key);
+    assert (funcallP (node));
 
     node = ARef( Pair, parsed, 1 );
     assert (!strcmp ("'deftype", (char*)node->val));
 
     node = ARef( Pair, parsed, 2 );
-    if (CALLBIT & node->key)
+    if (funcallP (node))
     {
         Array membs;
         InitArray( Pair, membs, 1 );
@@ -897,14 +941,14 @@ static void interp_deftype (const char* str)
             const char* membstr;
             const char* typestr;
             node = ARef( Pair, parsed, i );
-            if (CALLBIT & node->key)
+            if (funcallP (node))
             {
                 unsigned nelems;
                 nelems = StripPKey(node->key);
                 assert (1 == nelems || 2 == nelems);
 
                 node = ARef( Pair, parsed, ++i );
-                assert (!(CALLBIT & node->key));
+                assert (!funcallP (node));
                 membstr = (char*) node->val;
 
                 if (2 == nelems)
@@ -943,19 +987,19 @@ static void interp_deftype (const char* str)
         {
             const char* typestr;
             node = ARef( Pair, parsed, i );
-            assert (!(CALLBIT & node->key));
+            assert (!funcallP (node));
             typestr = (char*) node->val;
             dPushStack( pkey_t, types, ensure_named_type (typestr) );
         }
 
         if (3 == parsed.n)
         {
-            assert (internal_type_p (find_named_type (info.name)));
+            assert (internal_type_P (find_named_type (info.name)));
         }
         else
         {
             info.nmembs = types.n;
-            info.types = types.a;
+            info.types = (pkey_t*) types.a;
             add_compound_type (&info);
         }
     }
@@ -973,8 +1017,8 @@ static void interp_def (const char* str)
     Function func;
     Array parsed, types, formals, exprs, argmap;
     Pair* node;
-    char* buf = malloc ((1+ strlen (str)) * sizeof(char));
-    strcpy (buf, str);
+    char* buf;
+    buf = MemDup( char, str, 1+ strlen (str) );
 
     InitArray( Pair,     parsed,  1 );
     InitArray( Pair,     exprs,   1 );
@@ -986,7 +1030,7 @@ static void interp_def (const char* str)
     assert (parsed.n > 1);
 
     node = ARef( Pair, parsed, 0 );
-    assert (CALLBIT & node->key);
+    assert (funcallP (node));
     assert (2 == StripPKey(node->key) || 3 == StripPKey(node->key));
 
     node = ARef( Pair, parsed, 1 );
@@ -996,7 +1040,7 @@ static void interp_def (const char* str)
         /* Don't support variable assignment yet.
          * Need more levels of scoping.
          */
-    assert (CALLBIT & node->key);
+    assert (funcallP (node));
     func.nargs = StripPKey(node->key);
     assert (func.nargs > 0);
     -- func.nargs;
@@ -1008,7 +1052,7 @@ static void interp_def (const char* str)
     }
 
     node = ARef( Pair, parsed, 3 );
-    assert (!(CALLBIT & node->key));
+    assert (!funcallP (node));
     funcname = (char*) node->val;
 
     for (i = formals_offset; types.n < func.nargs; ++i)
@@ -1016,14 +1060,14 @@ static void interp_def (const char* str)
         const char* typestr;
         char* formalstr;
         node = ARef( Pair, parsed, i );
-        if (CALLBIT & node->key)
+        if (funcallP (node))
         {
             unsigned nelems;
             nelems = StripPKey(node->key);
             assert (1 == nelems || 2 == nelems);
 
             node = ARef( Pair, parsed, ++i );
-            assert (!(CALLBIT & node->key));
+            assert (!funcallP (node) && "(def ((name) arg1 arg2)) ?!");
             formalstr = (char*) node->val;
 
             if (2 == nelems)
@@ -1053,11 +1097,12 @@ static void interp_def (const char* str)
         Pair expr;
 
         node = ARef( Pair, parsed, i );
-        if (CALLBIT & node->key)
+        if (funcallP (node))
         {
             expr.key = StripPKey(node->key);
             assert (expr.key > 0);
-            expr.key = CALLBIT | (expr.key - 1);
+            expr.key = (expr.key - 1);
+            set_funcall_P (&expr, 1);
 
             node = ARef( Pair, parsed, ++i );
         }
@@ -1066,7 +1111,7 @@ static void interp_def (const char* str)
             expr.key = 0;
         }
 
-        assert (!(CALLBIT & node->key));
+        assert (!funcallP (node));
         symname = (char*) node->val;
 
         for (argi = 0; argi < formals.n; ++argi)
@@ -1090,7 +1135,8 @@ static void interp_def (const char* str)
     if (0 == exprs.n)
     {
         Pair expr;
-        expr.key = CALLBIT | 0;
+        expr.key = 0;
+        set_funcall_P (&expr, 1);
         expr.val = find_named_function ("nil");
         assert (expr.val && "Function not found.");
         PushStack( Pair, exprs, &expr );
@@ -1120,7 +1166,7 @@ static void parse_to_runtime (Runtime* run, const char* str)
     unsigned i;
     Array parsed;
     const unsigned N = 1;
-    char* buf = malloc ((1+ strlen (str)) * sizeof(char));
+    char* buf = AllocT( char, 1+ strlen (str) );
     strcpy (buf, str);
 
     InitArray( Pair, run->d, N );
@@ -1134,7 +1180,7 @@ static void parse_to_runtime (Runtime* run, const char* str)
     {
         Pair* node;
         node = ARef( Pair, parsed, i );
-        if (CALLBIT & node->key)
+        if (funcallP (node))
         {
             unsigned nargs;
             ++i;
@@ -1199,7 +1245,8 @@ static void assert_eql (const char* lhs, const char* rhs)
     if (lhsrun->e.n < 3)
         GrowArray(Pair, lhsrun->e, 3 - lhsrun->e.n);
 
-    expr.key = CALLBIT | 2;
+    expr.key = 2;
+    set_funcall_P (&expr, 1);
     expr.val = find_named_function ("eql");
     assert (expr.val && "Function not found.");
     copy_Pair (ARef( Pair, lhsrun->e, 0 ), &expr);
@@ -1336,6 +1383,7 @@ int main ()
     }
 #endif
 
+    interp_eval (out, "(list (yes))");
     cleanup_lisp ();
     return 0;
 }

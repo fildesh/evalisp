@@ -9,6 +9,9 @@ struct array_struct
 typedef struct array_struct Array;
 
 
+#define AllocT( Type, capacity ) \
+    ((Type*) malloc ((capacity) * sizeof (Type)));
+
 #define InitArray( Type, arr, capacity ) \
     do { \
         (arr).n = 0; \

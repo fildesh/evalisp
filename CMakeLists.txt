@@ -6,6 +6,8 @@ project (PipeLisp)
 
 set (srcs main.c)
 
+#set (CMAKE_C_COMPILER "clang")
+
 if (UNIX)
   set (install_dir "$ENV{HOME}/.wireshark/plugins")
   if (NOT CMAKE_BUILD_TYPE)
