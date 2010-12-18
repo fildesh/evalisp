@@ -16,7 +16,7 @@ typedef struct array_struct Array;
     do { \
         (arr).n = 0; \
         (arr).N = capacity; \
-        (arr).a = malloc ((arr).N * sizeof (Type)); \
+        if (0 != (arr).N)  (arr).a = AllocT( Type, (arr).N ); \
     } while (0)
 
 #if 0

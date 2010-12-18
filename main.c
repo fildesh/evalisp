@@ -81,17 +81,17 @@ struct function_struct
         struct function_struct_multi_case
         {
             FunctionSet funcs;
-        } multi;
+        } set;
     } info;
 };
 typedef struct function_struct Function;
 
-struct named_function_set_struct
+struct named_function_struct
 {
     char* name;
-    FunctionSet* a; /* Array of functions. */
+    Function* f;
 };
-typedef struct named_function_set_struct NamedFunctionSet;
+typedef struct named_function_struct NamedFunction;
 
 struct runtime_struct
 {
@@ -222,43 +222,64 @@ write_Pair (FILE* out, const Pair* pair)
 
 static
     void
-write_Function (FILE* out, const Function* f, const char* name)
+write_Function (FILE* out, const Function* f)
 {
     unsigned i;
-    fprintf (out, "(%s", name);
-    for (i = 0; i < f->nargs; ++i)
+    if (SetOfFunc == f->type)
     {
-        pkey_t t;
-        fputc (' ', out);
-        t = f->types[f->nargs -i -1];
-        fputs (type_info (t) -> name, out);
+        const FunctionSet* fs;
+        const char* name;
+        name = "funcs";
+        fprintf (out, "(%s", name);
+        fs = &f->info.set.funcs;
+        for (i = 0; i < fs->n; ++i)
+        {
+            fputc (' ', out);
+            write_Function (out, ARef( Function, *fs, i ));
+        }
+        fputc (')', out);
     }
-    fputc (')', out);
+    else
+    {
+        fputs ("(func", out);
+        for (i = 0; i < f->nargs; ++i)
+        {
+            pkey_t t;
+            fputc (' ', out);
+            t = f->types[f->nargs -i -1];
+            fputs (type_info (t) -> name, out);
+        }
+        fputc (')', out);
+    }
 }
 
-static
-    void
-write_FunctionSet (FILE* out, const FunctionSet* fs)
+static void write_Runtime (FILE* out, const Runtime* run)
 {
     unsigned i;
-    const char* func;
-
+    fputs ("Expression stack:\n", out);
+    for (i = 0; i < run->e.n; ++i)
     {
-            /* Begin hacks. */
-        NamedFunctionSet set;
-        size_t offset;
-        offset = (size_t) &set.a - (size_t) &set;
-        func = ((NamedFunctionSet*) ((size_t)fs - offset))->name;
-            /* End hacks. */
+        write_Pair (out, ARef(Pair, run->e, i));
+        fputc ('\n', out);
+    }
+    fputs ("Data stack:\n", out);
+    for (i = 0; i < run->d.n; ++i)
+    {
+        write_Pair (out, ARef(Pair, run->d, i));
+        fputc ('\n', out);
     }
 
-    fputs ("(func", out);
-    for (i = 0; i < fs->n; ++i)
+    if (0 != run->e.n)
     {
-        fputc (' ', out);
-        write_Function (out, ARef( Function, *fs, i ), func);
+        const Pair* expr;
+        expr = ARefLast( Pair, run->e );
+        if (funcallP (expr))
+        {
+            fputs ("Current function:\n", out);
+            write_Pair (out, expr);
+            fprintf (out, "\nnargs: %u\n", (unsigned) StripPKey(expr->key));
+        }
     }
-    fputc (')', out);
 }
 
 static
@@ -372,23 +393,36 @@ typeofP (pkey_t a, pkey_t t)
 }
 
 static
-    const Function*
-find_function (unsigned nargs, const Pair* args, const FunctionSet* fset)
+    int
+funcall_fit_P (unsigned nargs, const Pair* args, const Function* f)
 {
     unsigned i;
-    for (i = 0; i < fset->n; ++i)
+    if (nargs != f->nargs)  return 0;
+    for (i = 0; i < nargs; ++i)
+        if (!typeofP (StripPKey(args[i].key), f->types[i]))
+            return 0;
+    return 1;
+}
+
+static
+    const Function*
+find_function (unsigned nargs, const Pair* args, const Function* f)
+{
+    unsigned i;
+    if (SetOfFunc == f->type)
     {
-        const Function* func;
-        unsigned j;
-        func = ARef(Function, *fset, i);
-        if (nargs != func->nargs)
-            continue;
-        for (j = 0; j < nargs; ++j)
-            if (!typeofP (StripPKey(args[j].key), func->types[j]))
-                break;
-        if (j == nargs)
-            return func;
+        const FunctionSet* fset;
+        fset = &f->info.set.funcs;
+        for (i = 0; i < fset->n; ++i)
+        {
+            f = ARef(Function, *fset, i);
+            if (funcall_fit_P (nargs, args, f))  return f;
+        }
+        return 0;
     }
+
+    if (funcall_fit_P (nargs, args, f))  return f;
+
     return 0;
 }
 
@@ -417,28 +451,12 @@ eval1 (Runtime* run)
         run->d.n -= nargs;
         dsk = ARef( Pair, run->d, run->d.n );
 
-        f = find_function (nargs, dsk, (FunctionSet*) expr->val);
+        f = find_function (nargs, dsk, (Function*) expr->val);
         if (!f)
         {
-            FILE* out;
-            out = stderr;
-
-            fputs ("Data stack:\n", out);
             GrowArray( Pair, run->d, nargs );
-            for (i = 0; i < run->d.n; ++i)
-            {
-                write_Pair (out, ARef(Pair, run->d, i));
-                fputc ('\n', out);
-            }
-            fputs ("Expression stack:\n", out);
-            for (i = 0; i < run->e.n; ++i)
-            {
-                write_Pair (out, ARef(Pair, run->e, i));
-                fputc ('\n', out);
-            }
-            fputs ("Current function:\n", out);
-            write_Pair (out, expr);
-            fprintf (out, "\nnargs: %u\n", nargs);
+            GrowArray( Pair, run->e, 1 );
+            write_Runtime (stderr, run);
             assert (f && "Bad function call - check types and nargs.");
         }
         dsk = 0;
@@ -573,16 +591,16 @@ static void eval (Runtime* run)
     assert (1 == run->d.n);
 }
 
-static FunctionSet* find_named_function (const char* name)
+static Function* find_named_function (const char* name)
 {
     unsigned i;
     for (i = 0; i < Named_Functions.n; ++i)
     {
-        NamedFunctionSet* fs;
-        fs = ARef(NamedFunctionSet, Named_Functions, i);
-        if (streqlP (fs->name, name))
+        NamedFunction* f;
+        f = ARef(NamedFunction, Named_Functions, i);
+        if (streqlP (f->name, name))
         {
-            return fs->a;
+            return f->f;
         }
     }
     return 0;
@@ -614,20 +632,31 @@ static void copy_TypeInfo (TypeInfo* dst, const TypeInfo* src)
 
 static void cleanup_Function (Function* f)
 {
-    if (f->nargs)
-        free (f->types);
-    if (StandardFunc == f->type)
+    switch (f->type)
     {
-        free (f->info.std.exprs);
-        free (f->info.std.argmap);
+        case StandardFunc:
+        case MacroFunc:
+            free (f->info.std.exprs);
+            free (f->info.std.argmap);
+        case InternalFunc:
+        case ConstructFunc:
+        case AccessFunc:
+            if (f->nargs)
+                free (f->types);
+            break;
+        case SetOfFunc:
+            CleanupArray( Function, f->info.set.funcs );
+            break;
+        default:
+            break;
     }
 }
 
-static void cleanup_NamedFunctionSet (NamedFunctionSet* set)
+static void cleanup_NamedFunction (NamedFunction* namedfn)
 {
-    free (set->name);
-    CleanupArray( Function, *set->a );
-    free (set->a);
+    free (namedfn->name);
+    cleanup_Function (namedfn->f);
+    free (namedfn->f);
 }
 
 static void cleanup_TypeInfo (TypeInfo* info)
@@ -649,32 +678,51 @@ static void reverse_types (unsigned ntypes, pkey_t* types)
     }
 }
 
-static FunctionSet* force_init_named_function (const char* name)
+static Function* force_init_named_function (const char* name)
 {
-    NamedFunctionSet set;
-    set.name = MemDup(char, name, 1+strlen(name));
-    set.a = AllocT( FunctionSet, 1 );
-    InitArray(Function, *set.a, 1);
-    PushStack(NamedFunctionSet, Named_Functions, &set);
-    return ARefLast( NamedFunctionSet, Named_Functions )->a;
+    NamedFunction* namedfn;
+    Function* f;
+    GrowArray( NamedFunction, Named_Functions, 1 );
+    namedfn = ARefLast( NamedFunction, Named_Functions );
+    namedfn->name = MemDup(char, name, 1+strlen(name));
+    namedfn->f = AllocT( Function, 1 );
+    f = namedfn->f;
+    f->type = PendingDefFunc;
+    InitArray( Pair, f->info.set.funcs, 0 );
+    return f;
 }
 
-static FunctionSet* ensure_named_function (const char* name)
+static Function* ensure_named_function (const char* name)
 {
-    FunctionSet* fs;
-    fs = find_named_function (name);
-    if (!fs)  fs = force_init_named_function (name);
-    return fs;
+    Function* f;
+    f = find_named_function (name);
+    if (!f)  f = force_init_named_function (name);
+    return f;
 }
 
 static Function* add_named_function (const char* name, const Function* f)
 {
-    FunctionSet* fs;
     Function* f_new;
-    fs = ensure_named_function (name);
+    f_new = ensure_named_function (name);
+    assert (NFuncTypes > f_new->type);
+    assert (MacroFunc != f_new->type && "Cannot def over a macro.");
+    if (PendingDefFunc != f_new->type
+        &&   SetOfFunc != f_new->type)
+    {
+        Function tmp;
+        memcpy (&tmp, f_new, sizeof (Function));
+        InitArray( Function, f_new->info.set.funcs, 2 );
+        PushStack( Function, f_new->info.set.funcs, &tmp );
+        f_new->type = SetOfFunc;
+    }
 
-    GrowArray(Function, *fs, 1);
-    f_new = ARefLast( Function, *fs );
+    if (SetOfFunc == f_new->type)
+    {
+        FunctionSet* fset;
+        fset = &f_new->info.set.funcs;
+        GrowArray( Function, *fset, 1 );
+        f_new = ARefLast( Function, *fset );
+    }
     copy_Function (f_new, f);
     reverse_types (f_new->nargs, f_new->types);
     if (StandardFunc == f->type)
@@ -794,7 +842,7 @@ static void init_lisp ()
     const unsigned N = 1;
     InitArray( TypeInfo, Named_Types, N );
     InitArray( InternalTypeInfo, Internal_Types, N );
-    InitArray( NamedFunctionSet, Named_Functions, N );
+    InitArray( NamedFunction, Named_Functions, N );
 
     {
             /* Add the /any/ type, it's hardcoded. */
@@ -815,14 +863,14 @@ static void init_lisp ()
         internal.copy_fn = 0;
         internal.free_fn = 0;
         internal.write_fn =
-            (void (*) (FILE*, const void*)) &write_FunctionSet;
+            (void (*) (FILE*, const void*)) &write_Function;
         add_internal_type ("func", &internal);
     }
 }
 
 static void cleanup_lisp ()
 {
-    CleanupArray( NamedFunctionSet, Named_Functions );
+    CleanupArray( NamedFunction, Named_Functions );
     CleanupArray( TypeInfo, Named_Types );
     free (Internal_Types.a);
 }
@@ -1016,7 +1064,7 @@ static void interp_deftype (const char* str)
 static void interp_def (const char* str)
 {
     const unsigned formals_offset = 4;
-    const char* funcname;
+    char* funcname;
     unsigned i;
     Function func;
     Array parsed, types, formals, exprs, argmap;
@@ -1155,21 +1203,27 @@ static void interp_def (const char* str)
         PushStack( Pair, exprs, &expr );
     }
 
-    func.types = (pkey_t*) types.a;
-    func.info.std.nexprs = exprs.n;
-    func.info.std.nsubst = argmap.n / 2;
-    func.info.std.exprs = (Pair*) exprs.a;
-    func.info.std.argmap = (unsigned*) argmap.a;
+    if (StandardFunc == func.type)
+    {
+        func.types = (pkey_t*) types.a;
+        func.info.std.nexprs = exprs.n;
+        func.info.std.nsubst = argmap.n / 2;
+        func.info.std.exprs = (Pair*) exprs.a;
+        func.info.std.argmap = (unsigned*) argmap.a;
+    }
     add_named_function (funcname, &func);
 
     free (parsed.a);
     if (func.nargs > 0)
     {
-        free (types.a);
+            /* free (types.a); */
         free (formals.a);
     }
+    cleanup_Function (&func);
+    /*
     free (exprs.a);
     free (argmap.a);
+    */
     free (buf);
 }
 
@@ -1269,7 +1323,8 @@ static void assert_eql (const char* lhs, const char* rhs)
     eval (lhsrun);
 
     copy_Pair (&expr, ARef( Pair, lhsrun->d, 0 ));
-    assert (StripPKey(expr.key) == find_named_type ("yes"));
+    assert (StripPKey(expr.key) == find_named_type ("yes")
+            && "Evaluated expressions are not equal! lhs != rhs.");
 
     cleanup_runtime (lhsrun);
     cleanup_runtime (rhsrun);
@@ -1296,6 +1351,9 @@ static void test_cases (FILE* out)
 
     assert_eql ("(cons (nil) (list (yes)))",
                 "(rev (cons (yes) (cons (nil) (nil))))");
+
+    assert_eql ("(yes)",
+                "(in (nil) (set (cons (yes) (cons (nil) (list (yes))))))");
 }
 
 
@@ -1344,6 +1402,10 @@ int main ()
     interp_def ("(def (not (a    )) (yes))");
     interp_def ("(def (not (a yes))      )");
 
+    interp_def ("(def (if (a    ) b c) c)");
+    interp_def ("(def (if (a yes) b c) b)");
+
+
     interp_def ("(def (eql (a cons) (b     )))");
     interp_def ("(def (eql (a     ) (b cons)))");
     interp_def ("(def (eql (a cons) (b cons))"
@@ -1366,6 +1428,22 @@ int main ()
     interp_def ("(def (map (f func) (L cons))"
                 "  (cons (f (car L))"
                 "         (map f (cdr L))))");
+
+    interp_def ("(def (consif (pred func) e L)"
+                "   (if (pred e) (cons e L) L))");
+
+    interp_def ("(def (filter (f func) (L)))");
+    interp_def ("(def (filter (f func) (L cons))"
+                "  (consif f (car L) (filter f (cdr L))))");
+
+    interp_deftype ("(deftype (set (elements list)))");
+
+    interp_def ("(def (in e (L)))");
+    interp_def ("(def (in e (L cons))"
+                "  (or (eql e (car L))"
+                "      (in e (cdr L))))");
+    interp_def ("(def (in e (S set))"
+                "  (in e (elements S)))");
 
     test_cases (out);
 
