@@ -23,8 +23,9 @@ static const unsigned WILDBIT = HIGHBIT;
 #undef HIGHBIT
     /* static const char* NilTypeName = "nil"; */
     /* static const char* AnyTypeName = "any"; */
-static const pkey_t FunctionInternalType = 0;
-static const pkey_t AnyType = 1;
+static pkey_t ScratchPKey;
+static const pkey_t AnyType = 0;
+static const pkey_t FunctionInternalType = 1;
 
 #define StripPKey(k)  (k & ~(MUTABIT | CALLBIT))
 #define StripWildBit(k)  (k & ~WILDBIT)
@@ -108,7 +109,6 @@ struct internal_type_info_struct
     void* (* copy_fn) (const void*);
     void  (* free_fn) (void*);
     void (* write_fn) (FILE*, const void*);
-    void (** get_fns) (Pair*, unsigned, void*);
 };
 typedef struct internal_type_info_struct InternalTypeInfo;
 
@@ -118,10 +118,28 @@ static const TypeInfo* type_info (pkey_t type)
     return ARef( TypeInfo, Named_Types, type );
 }
 
-static const InternalTypeInfo* internal_type_info (pkey_t type)
+static int compound_type_p (pkey_t typei)
 {
-    assert (type < Internal_Types.n);
-    return ARef( InternalTypeInfo, Internal_Types, type );
+    TypeInfo* info;
+    info = ARef( TypeInfo, Named_Types, typei );
+    return WILDBIT & info->nmembs && info->types;
+}
+
+static int internal_type_p (pkey_t typei)
+{
+    TypeInfo* info;
+    info = ARef( TypeInfo, Named_Types, typei );
+    return WILDBIT & info->nmembs && !info->types;
+}
+
+static const InternalTypeInfo* internal_type_info (pkey_t typei)
+{
+    TypeInfo* info;
+    unsigned i;
+    assert (internal_type_p (typei));
+    info = ARef( TypeInfo, Named_Types, typei );
+    i = (unsigned) StripWildBit(info->nmembs);
+    return ARef( InternalTypeInfo, Internal_Types, i );
 }
 
 static
@@ -255,7 +273,7 @@ copy_Pair (Pair* dst, const Pair* src)
     pkey_t type;
     type = StripPKey(src->key);
     assert (type < Named_Types.n);
-    if (type < Internal_Types.n)
+    if (internal_type_p (type))
     {
         const InternalTypeInfo* info;
 
@@ -300,13 +318,13 @@ static
 typeofp (pkey_t a, pkey_t t)
 {
     TypeInfo* info;
-    info = ARef( TypeInfo, Named_Types, a );
-    assert (info->nmembs == StripWildBit(info->nmembs));
+    assert (!compound_type_p (a)
+            && "Why check for compound type 'is a' compound type?");
 
     if (AnyType == t)  return 1;
 
     info = ARef( TypeInfo, Named_Types, t );
-    if (WILDBIT & info->nmembs)
+    if (compound_type_p (t))
     {
         unsigned i, ntypes;
         ntypes = StripWildBit(info->nmembs);
@@ -642,6 +660,7 @@ static pkey_t ensure_named_type (const char* name)
     info = ARefLast( TypeInfo, Named_Types );
     info->name = MemDup( char, name, 1+strlen(name) );
     info->nmembs = WILDBIT;
+    info->types = &ScratchPKey;
     return i;
 }
 
@@ -675,6 +694,7 @@ static pkey_t add_simple_type (const TypeInfo* src, const char* const* membs)
         add_named_function (membs[i], &f);
     }
 
+    assert (!compound_type_p (type) && !internal_type_p (type));
     return type;
 }
 
@@ -690,7 +710,23 @@ static pkey_t add_compound_type (const TypeInfo* src)
     dst->nmembs = WILDBIT | src->nmembs;
     dst->types  = MemDup(pkey_t, src->types, src->nmembs);
     
+    assert (compound_type_p (type));
     return type;
+}
+
+static
+    pkey_t
+add_internal_type (const char* name, const InternalTypeInfo* iinfo)
+{
+    pkey_t typei;
+    TypeInfo* info;
+    typei = ensure_named_type (name);
+    info = ARef( TypeInfo, Named_Types, typei );
+    info->nmembs = WILDBIT | Internal_Types.n;
+    info->types = 0;
+    PushStack( InternalTypeInfo, Internal_Types, iinfo );
+    assert (internal_type_p (typei));
+    return typei;
 }
 
 static pkey_t find_named_type (const char* name)
@@ -718,13 +754,18 @@ static void init_lisp ()
     InitArray( InternalTypeInfo, Internal_Types, N );
     InitArray( NamedFunctionSet, Named_Functions, N );
 
-    {   /* Add internal types. */
-        TypeInfo info;
-        InternalTypeInfo internal;
+    {
+            /* Add the /any/ type, it's hardcoded. */
+        pkey_t typei;
+        TypeInfo* info;
+        typei = ensure_named_type ("any");
+        info = ARef( TypeInfo, Named_Types, typei );
+        info->nmembs = WILDBIT;
+        assert (AnyType == typei);
+    }
 
-        info.name = "func";
-        info.nmembs = 0;
-        info.types = 0;
+    {   /* Add internal types. */
+        InternalTypeInfo internal;
 
             /* internal.copy_fn = copy_FunctionSet; */
             /* internal.cleanup_fn = cleanup_FunctionSet; */
@@ -732,18 +773,7 @@ static void init_lisp ()
         internal.free_fn = 0;
         internal.write_fn =
             (void (*) (FILE*, const void*)) &write_FunctionSet;
-        add_simple_type (&info, 0);
-        PushStack( InternalTypeInfo, Internal_Types, &internal );
-    }
-
-    {
-            /* Add the /any/ type, it's hardcoded. */
-        pkey_t t;
-        TypeInfo ts;
-        ts.name = "any";
-        ts.nmembs = 0;
-        t = add_compound_type (&ts);
-        assert (AnyType == t);
+        add_internal_type ("func", &internal);
     }
 }
 
@@ -918,9 +948,16 @@ static void interp_deftype (const char* str)
             dPushStack( pkey_t, types, ensure_named_type (typestr) );
         }
 
-        info.nmembs = types.n;
-        info.types = types.a;
-        add_compound_type (&info);
+        if (3 == parsed.n)
+        {
+            assert (internal_type_p (find_named_type (info.name)));
+        }
+        else
+        {
+            info.nmembs = types.n;
+            info.types = types.a;
+            add_compound_type (&info);
+        }
     }
 
     free (parsed.a);
@@ -1208,6 +1245,15 @@ int main ()
     FILE* out;
     out = stdout;
     init_lisp ();
+
+    {
+        InternalTypeInfo internal;
+        internal.copy_fn = 0;
+        internal.free_fn = 0;
+        internal.write_fn = 0;
+        add_internal_type ("int", &internal);
+        interp_deftype ("('deftype int)");
+    }
 
     interp_deftype ("('deftype (nil))");
     interp_deftype ("('deftype (yes))");
