@@ -41,7 +41,7 @@ enum function_type_enum
 {
     StandardFunc, InternalFunc,
     ConstructFunc, AccessFunc,
-    MacroFunc, SetOfFunc,
+    SetOfFunc,
     PendingDefFunc, NFuncTypes
 };
 typedef enum function_type_enum FunctionType;
@@ -143,6 +143,39 @@ static void set_funcall_P (Pair* pair, int b)
     else    pair->key &= ~CALLBIT;
 }
 
+static int fixarg_func_P (const Function* f)
+{
+    return !(WILDBIT & f->nargs);
+}
+
+static void set_fixarg_func_P (Function* f, int b)
+{
+    if (b)  f->nargs &= ~WILDBIT;
+    else    f->nargs |=  WILDBIT;
+}
+
+static int vararg_func_P (const Function* f)
+{
+    return WILDBIT == f->nargs;
+}
+
+static void set_vararg_func_P (Function* f, int b)
+{
+    if (b)  f->nargs = 0;
+    set_fixarg_func_P (f, !b);
+}
+
+static int macro_func_P (const Function* f)
+{
+    return !fixarg_func_P (f) && f->types;
+}
+
+static void set_macro_func_P (Function* f, int b)
+{
+    if (b)  f->types = &ScratchPKey;
+    set_fixarg_func_P (f, !b);
+}
+
 static int simple_type_P (const TypeInfo* info)
 {
     return !(WILDBIT & info->nmembs);
@@ -150,8 +183,8 @@ static int simple_type_P (const TypeInfo* info)
 
 static void set_simple_type_P (TypeInfo* info, int b)
 {
-    if (b)  info->nmembs &= WILDBIT;
-    else    info->nmembs |= WILDBIT;
+    if (b)  info->nmembs &= ~WILDBIT;
+    else    info->nmembs |=  WILDBIT;
 }
 
 static int compound_type_P (const TypeInfo* info)
@@ -253,7 +286,9 @@ write_Function (FILE* out, const Function* f)
     }
 }
 
-static void write_Runtime (FILE* out, const Runtime* run)
+static
+    void
+write_Runtime (FILE* out, const Runtime* run)
 {
     unsigned i;
     fputs ("Expression stack:\n", out);
@@ -635,13 +670,12 @@ static void cleanup_Function (Function* f)
     switch (f->type)
     {
         case StandardFunc:
-        case MacroFunc:
             free (f->info.std.exprs);
             free (f->info.std.argmap);
         case InternalFunc:
         case ConstructFunc:
         case AccessFunc:
-            if (f->nargs)
+            if (!vararg_func_P (f))
                 free (f->types);
             break;
         case SetOfFunc:
@@ -688,7 +722,8 @@ static Function* force_init_named_function (const char* name)
     namedfn->f = AllocT( Function, 1 );
     f = namedfn->f;
     f->type = PendingDefFunc;
-    InitArray( Pair, f->info.set.funcs, 0 );
+    f->nargs = 0;
+    f->types = 0;
     return f;
 }
 
@@ -705,7 +740,8 @@ static Function* add_named_function (const char* name, const Function* f)
     Function* f_new;
     f_new = ensure_named_function (name);
     assert (NFuncTypes > f_new->type);
-    assert (MacroFunc != f_new->type && "Cannot def over a macro.");
+    assert (!vararg_func_P (f_new) && "Cannot def over a vararg function.");
+    assert (!vararg_func_P (f) && "Existing vararg function def.");
     if (PendingDefFunc != f_new->type
         &&   SetOfFunc != f_new->type)
     {
@@ -1089,10 +1125,7 @@ static void interp_def (const char* str)
     assert (streqlP ("def", (char*) node->val));
 
     node = ARef( Pair, parsed, 2 );
-        /* Don't support variable assignment yet.
-         * Need more levels of scoping.
-         */
-    assert (funcallP (node));
+    assert (funcallP (node) && "Non-functions not supported yet in def's.");
     func.nargs = StripPKey(node->key);
     assert (func.nargs > 0);
     -- func.nargs;
@@ -1107,9 +1140,12 @@ static void interp_def (const char* str)
     assert (!funcallP (node));
     funcname = (char*) node->val;
 
-    func.type = ('\'' == funcname[0]) ? MacroFunc : StandardFunc;
+    func.type = StandardFunc;
+        /* TODO: macros */
+        /* func.type = ('\'' == funcname[0]) ? MacroFunc : StandardFunc; */
 
-    if (MacroFunc == func.type)
+        /* TODO: macros */
+    if (macro_func_P (&func))
         assert (1 == func.nargs && "Macros only take one list argument.");
 
     for (i = formals_offset; types.n < func.nargs; ++i)
@@ -1118,7 +1154,8 @@ static void interp_def (const char* str)
         char* formalstr;
         node = ARef( Pair, parsed, i );
         
-        if (MacroFunc == func.type)
+            /* TODO: macros */
+        if (macro_func_P (&func))
             assert (!funcallP (node) && "Use implied macro param type.");
 
         if (funcallP (node))
@@ -1186,7 +1223,7 @@ static void interp_def (const char* str)
         }
         else
         {
-            expr.val = find_named_function ((char*) node->val);
+            expr.val = ensure_named_function ((char*) node->val);
             assert (expr.val && "Function not found.");
         }
 
