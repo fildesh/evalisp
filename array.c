@@ -20,23 +20,23 @@ typedef struct array_struct Array;
     } while (0)
 
 #if 0
-static unsigned ARef_helper (const Array* arr, unsigned i)
+static unsigned dARef_helper (const Array* arr, unsigned i)
 {
     assert ((int) i >= 0);
-    assert (i < arr->n);
+    assert (i <= arr->N);
     return i;
 }
-#define ARef( Type, arr, i ) \
-    (&((Type*) (arr).a)[ARef_helper (&(arr), (unsigned) i)])
+#define dARef( Type, arr, i ) \
+    (((Type*) (arr).a)[dARef_helper (&(arr), (unsigned) i)])
 #else
 
 #define dARef( Type, arr, i ) \
     (((Type*) (arr).a)[i])
 
+#endif
+
 #define ARef( Type, arr, i ) \
     (&dARef(Type, arr, i))
-
-#endif
 
 #define dARefLast( Type, arr ) \
     dARef( Type, arr, (arr).n - 1 )

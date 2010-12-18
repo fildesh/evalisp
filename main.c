@@ -41,8 +41,8 @@ enum function_type_enum
 {
     StandardFunc, InternalFunc,
     ConstructFunc, AccessFunc,
-    PendingDefFunc, SetOfFunc,
-    NFuncTypes
+    MacroFunc, SetOfFunc,
+    PendingDefFunc, NFuncTypes
 };
 typedef enum function_type_enum FunctionType;
 
@@ -116,12 +116,6 @@ struct internal_type_info_struct
 };
 typedef struct internal_type_info_struct InternalTypeInfo;
 
-static const TypeInfo* type_info (pkey_t type)
-{
-    assert (type < Named_Types.n);
-    return ARef( TypeInfo, Named_Types, type );
-}
-
 static int streqlP (const char* a, const char* b)
 {
     return 0 == strcmp (a, b);
@@ -160,26 +154,26 @@ static void set_simple_type_P (TypeInfo* info, int b)
     else    info->nmembs |= WILDBIT;
 }
 
-static int compound_type_P (pkey_t typei)
+static int compound_type_P (const TypeInfo* info)
 {
-    TypeInfo* info;
-    info = ARef( TypeInfo, Named_Types, typei );
     return !simple_type_P (info) && info->types;
 }
 
-static int internal_type_P (pkey_t typei)
+static int internal_type_P (const TypeInfo* info)
 {
-    TypeInfo* info;
-    info = ARef( TypeInfo, Named_Types, typei );
     return !simple_type_P (info) && !info->types;
 }
 
-static const InternalTypeInfo* internal_type_info (pkey_t typei)
+static const TypeInfo* type_info (pkey_t type)
 {
-    TypeInfo* info;
+    assert (type < Named_Types.n);
+    return ARef( TypeInfo, Named_Types, type );
+}
+
+static const InternalTypeInfo* internal_type_info (const TypeInfo* info)
+{
     unsigned i;
-    assert (internal_type_P (typei));
-    info = ARef( TypeInfo, Named_Types, typei );
+    assert (internal_type_P (info));
     i = (unsigned) StripWildBit(info->nmembs);
     return ARef( InternalTypeInfo, Internal_Types, i );
 }
@@ -196,24 +190,23 @@ static
 write_Pair (FILE* out, const Pair* pair)
 {
     pkey_t type;
+    const TypeInfo* info;
     if (funcallP (pair))
         type = FunctionInternalType;
     else
         type = StripPKey(pair->key);
     assert (type < Named_Types.n);
-    if (type < Internal_Types.n)
+    info = type_info (type);
+    if (internal_type_P (info))
     {
-        const InternalTypeInfo* info;
-        info = internal_type_info (type);
-        assert (info->write_fn);
-        (*info->write_fn) (out, pair->val);
+        const InternalTypeInfo* internal;
+        internal = internal_type_info (info);
+        assert (internal->write_fn);
+        (*internal->write_fn) (out, pair->val);
     }
     else
     {
         unsigned i;
-        const TypeInfo* info;
-        info = type_info (type);
-
         fputc ('(', out);
         fputs (info->name, out);
         pair = (Pair*) pair->val;
@@ -238,7 +231,7 @@ write_Function (FILE* out, const Function* f, const char* name)
         pkey_t t;
         fputc (' ', out);
         t = f->types[f->nargs -i -1];
-        fputs (ARef( TypeInfo, Named_Types, t )->name, out);
+        fputs (type_info (t) -> name, out);
     }
     fputc (')', out);
 }
@@ -272,22 +265,22 @@ static
     void
 cleanup_Pair (Pair* pair)
 {
-    pkey_t type;
-    type = StripPKey(pair->key);
-    assert (type < Named_Types.n);
-    if (type < Internal_Types.n)
+    const TypeInfo* info;
+    pkey_t typei;
+    typei = StripPKey(pair->key);
+    assert (typei < Named_Types.n);
+    info = type_info (typei);
+    if (internal_type_P (info))
     {
-        const InternalTypeInfo* info;
-        info = internal_type_info (type);
-        if (info->free_fn)
-            (*info->free_fn) (pair->val);
+        const InternalTypeInfo* internal;
+        internal = internal_type_info (info);
+        if (internal->free_fn)
+            (*internal->free_fn) (pair->val);
         else
-            assert (!info->copy_fn);
+            assert (!internal->copy_fn);
     }
     else
     {
-        const TypeInfo* info;
-        info = type_info (type);
         assert (info->nmembs == StripWildBit(info->nmembs));
         if (info->nmembs)
         {
@@ -312,30 +305,30 @@ static
     void
 copy_Pair (Pair* dst, const Pair* src)
 {
-    pkey_t type;
-    type = StripPKey(src->key);
-    assert (type < Named_Types.n);
-    if (internal_type_P (type))
+    pkey_t typei;
+    const TypeInfo* info;
+    typei = StripPKey(src->key);
+    assert (typei < Named_Types.n);
+    info = type_info (typei);
+    if (internal_type_P (info))
     {
-        const InternalTypeInfo* info;
+        const InternalTypeInfo* internal;
 
-        info = internal_type_info (type);
-        if (info->copy_fn)
+        internal = internal_type_info (info);
+        if (internal->copy_fn)
         {
             dst->key = mutableP (src);
-            dst->val = (*info->copy_fn) (src->val);
+            dst->val = (*internal->copy_fn) (src->val);
         }
         else
         {
             assert (!mutableP (src));
-            assert (!info->free_fn);
+            assert (!internal->free_fn);
             set_pair (dst, src);
         }
     }
     else
     {
-        const TypeInfo* info;
-        info = type_info (type);
         if (!info->nmembs)
         {
             assert (!mutableP (src));
@@ -344,7 +337,7 @@ copy_Pair (Pair* dst, const Pair* src)
         else
         {
             unsigned i;
-            dst->key = MUTABIT | type;
+            dst->key = MUTABIT | typei;
             dst->val = AllocT( Pair, info->nmembs );
 
             src = (Pair*) src->val;
@@ -359,14 +352,15 @@ static
     int
 typeofP (pkey_t a, pkey_t t)
 {
-    TypeInfo* info;
-    assert (!compound_type_P (a)
-            && "Why check for compound type 'is a' compound type?");
-
+    const TypeInfo* info;
     if (AnyType == t)  return 1;
 
-    info = ARef( TypeInfo, Named_Types, t );
-    if (compound_type_P (t))
+    info = type_info (a);
+    assert (!compound_type_P (info)
+            && "Why check for compound type 'is a' compound type?");
+
+    info = type_info (t);
+    if (compound_type_P (info))
     {
         unsigned i, ntypes;
         ntypes = StripWildBit(info->nmembs);
@@ -424,7 +418,8 @@ eval1 (Runtime* run)
         dsk = ARef( Pair, run->d, run->d.n );
 
         f = find_function (nargs, dsk, (FunctionSet*) expr->val);
-        if (!f) {
+        if (!f)
+        {
             FILE* out;
             out = stderr;
 
@@ -563,7 +558,7 @@ eval1 (Runtime* run)
         }
         else
         {
-            assert(0);
+            assert(0 && "Unknown function type.");
         }
     }
     else
@@ -739,7 +734,7 @@ static pkey_t add_simple_type (const TypeInfo* src, const char* const* membs)
         add_named_function (membs[i], &f);
     }
 
-    assert (!compound_type_P (type) && !internal_type_P (type));
+    assert (!compound_type_P (dst) && !internal_type_P (dst));
     return type;
 }
 
@@ -755,7 +750,7 @@ static pkey_t add_compound_type (const TypeInfo* src)
     set_simple_type_P (dst, 0);
     dst->types  = MemDup(pkey_t, src->types, src->nmembs);
     
-    assert (compound_type_P (type));
+    assert (compound_type_P (dst));
     return type;
 }
 
@@ -771,7 +766,7 @@ add_internal_type (const char* name, const InternalTypeInfo* iinfo)
     set_simple_type_P (info, 0);
     info->types = 0;
     PushStack( InternalTypeInfo, Internal_Types, iinfo );
-    assert (internal_type_P (typei));
+    assert (internal_type_P (info));
     return typei;
 }
 
@@ -999,7 +994,11 @@ static void interp_deftype (const char* str)
 
         if (3 == parsed.n)
         {
-            assert (internal_type_P (find_named_type (info.name)));
+            pkey_t type;
+            const TypeInfo* chkinfo;
+            type = find_named_type (info.name);
+            chkinfo = type_info (type);
+            assert (internal_type_P (chkinfo));
         }
         else
         {
@@ -1060,11 +1059,20 @@ static void interp_def (const char* str)
     assert (!funcallP (node));
     funcname = (char*) node->val;
 
+    func.type = ('\'' == funcname[0]) ? MacroFunc : StandardFunc;
+
+    if (MacroFunc == func.type)
+        assert (1 == func.nargs && "Macros only take one list argument.");
+
     for (i = formals_offset; types.n < func.nargs; ++i)
     {
         const char* typestr;
         char* formalstr;
         node = ARef( Pair, parsed, i );
+        
+        if (MacroFunc == func.type)
+            assert (!funcallP (node) && "Use implied macro param type.");
+
         if (funcallP (node))
         {
             unsigned nelems;
@@ -1148,7 +1156,6 @@ static void interp_def (const char* str)
     }
 
     func.types = (pkey_t*) types.a;
-    func.type = StandardFunc;
     func.info.std.nexprs = exprs.n;
     func.info.std.nsubst = argmap.n / 2;
     func.info.std.exprs = (Pair*) exprs.a;
