@@ -122,6 +122,11 @@ static const TypeInfo* type_info (pkey_t type)
     return ARef( TypeInfo, Named_Types, type );
 }
 
+static int streqlP (const char* a, const char* b)
+{
+    return 0 == strcmp (a, b);
+}
+
 static int mutableP (const Pair* pair)
 {
     return !!(MUTABIT & pair->key);
@@ -580,7 +585,7 @@ static FunctionSet* find_named_function (const char* name)
     {
         NamedFunctionSet* fs;
         fs = ARef(NamedFunctionSet, Named_Functions, i);
-        if (0 == strcmp (fs->name, name))
+        if (streqlP (fs->name, name))
         {
             return fs->a;
         }
@@ -693,7 +698,7 @@ static pkey_t ensure_named_type (const char* name)
     unsigned i;
     TypeInfo* info;
     for (i = 0; i < Named_Types.n; ++i)
-        if (0 == strcmp (ARef(TypeInfo, Named_Types, i)->name, name))
+        if (streqlP (ARef(TypeInfo, Named_Types, i)->name, name))
             return i;
 
     GrowArray( TypeInfo, Named_Types, 1 );
@@ -774,7 +779,7 @@ static pkey_t find_named_type (const char* name)
 {
     unsigned i;
     for (i = 0; i < Named_Types.n; ++i)
-        if (0 == strcmp (ARef(TypeInfo, Named_Types, i)->name, name))
+        if (streqlP (ARef(TypeInfo, Named_Types, i)->name, name))
             return i;
     assert (0 && "Unknown type.");
 }
@@ -918,10 +923,10 @@ static void interp_deftype (const char* str)
     assert (parsed.n > 1);
 
     node = ARef( Pair, parsed, 0 );
-    assert (funcallP (node));
+    assert (funcallP (node) && "Plain value at toplevel?!");
 
     node = ARef( Pair, parsed, 1 );
-    assert (!strcmp ("'deftype", (char*)node->val));
+    assert (streqlP ("deftype", (char*)node->val));
 
     node = ARef( Pair, parsed, 2 );
     if (funcallP (node))
@@ -1034,7 +1039,7 @@ static void interp_def (const char* str)
     assert (2 == StripPKey(node->key) || 3 == StripPKey(node->key));
 
     node = ARef( Pair, parsed, 1 );
-    assert (!strcmp ("'def", (char*) node->val));
+    assert (streqlP ("def", (char*) node->val));
 
     node = ARef( Pair, parsed, 2 );
         /* Don't support variable assignment yet.
@@ -1115,7 +1120,7 @@ static void interp_def (const char* str)
         symname = (char*) node->val;
 
         for (argi = 0; argi < formals.n; ++argi)
-            if (0 == strcmp (symname, dARef( char*, formals, argi )))
+            if (streqlP (symname, dARef( char*, formals, argi )))
                 break;
 
         if (argi < formals.n)
@@ -1299,61 +1304,61 @@ int main ()
         internal.free_fn = 0;
         internal.write_fn = 0;
         add_internal_type ("int", &internal);
-        interp_deftype ("('deftype int)");
+        interp_deftype ("(deftype int)");
     }
 
-    interp_deftype ("('deftype (nil))");
-    interp_deftype ("('deftype (yes))");
-    interp_deftype ("('deftype (cons car (cdr list)))");
+    interp_deftype ("(deftype (nil))");
+    interp_deftype ("(deftype (yes))");
+    interp_deftype ("(deftype (cons car (cdr list)))");
 
-    interp_deftype ("('deftype list cons nil)");
-    interp_deftype ("('deftype bool yes nil)");
+    interp_deftype ("(deftype list cons nil)");
+    interp_deftype ("(deftype bool yes nil)");
 
-    interp_def ("('def (or (a yes) (b yes)) (yes))");
-    interp_def ("('def (or (a yes) (b    )) (yes))");
-    interp_def ("('def (or (a    ) (b yes)) (yes))");
-    interp_def ("('def (or (a    ) (b    ))      )");
+    interp_def ("(def (or (a yes) (b yes)) (yes))");
+    interp_def ("(def (or (a yes) (b    )) (yes))");
+    interp_def ("(def (or (a    ) (b yes)) (yes))");
+    interp_def ("(def (or (a    ) (b    ))      )");
 
-    interp_def ("('def (and (a yes) (b yes)) (yes))");
-    interp_def ("('def (and (a yes) (b    ))      )");
-    interp_def ("('def (and (a    ) (b yes))      )");
-    interp_def ("('def (and (a    ) (b    ))      )");
+    interp_def ("(def (and (a yes) (b yes)) (yes))");
+    interp_def ("(def (and (a yes) (b    ))      )");
+    interp_def ("(def (and (a    ) (b yes))      )");
+    interp_def ("(def (and (a    ) (b    ))      )");
 
-    interp_def ("('def (impl (a yes) (b yes)) (yes))");
-    interp_def ("('def (impl (a yes) (b    ))      )");
-    interp_def ("('def (impl (a    ) (b yes)) (yes))");
-    interp_def ("('def (impl (a    ) (b    )) (yes))");
+    interp_def ("(def (impl (a yes) (b yes)) (yes))");
+    interp_def ("(def (impl (a yes) (b    ))      )");
+    interp_def ("(def (impl (a    ) (b yes)) (yes))");
+    interp_def ("(def (impl (a    ) (b    )) (yes))");
 
-    interp_def ("('def (eql (a yes) (b yes)) (yes))");
-    interp_def ("('def (eql (a yes) (b    ))      )");
-    interp_def ("('def (eql (a    ) (b yes))      )");
-    interp_def ("('def (eql (a    ) (b    )) (yes))");
+    interp_def ("(def (eql (a yes) (b yes)) (yes))");
+    interp_def ("(def (eql (a yes) (b    ))      )");
+    interp_def ("(def (eql (a    ) (b yes))      )");
+    interp_def ("(def (eql (a    ) (b    )) (yes))");
 
-    interp_def ("('def (not (a    )) (yes))");
-    interp_def ("('def (not (a yes))      )");
+    interp_def ("(def (not (a    )) (yes))");
+    interp_def ("(def (not (a yes))      )");
 
-    interp_def ("('def (eql (a cons) (b     )))");
-    interp_def ("('def (eql (a     ) (b cons)))");
-    interp_def ("('def (eql (a cons) (b cons))"
-                " (and (eql (car a) (car b))"
-                "      (eql (cdr a) (cdr b))))");
+    interp_def ("(def (eql (a cons) (b     )))");
+    interp_def ("(def (eql (a     ) (b cons)))");
+    interp_def ("(def (eql (a cons) (b cons))"
+                "  (and (eql (car a) (car b))"
+                "       (eql (cdr a) (cdr b))))");
 
-    interp_def ("('def (cat (a     ) (b list)) b)");
-    interp_def ("('def (cat (a cons) (b list))"
-                " (cons (car a)"
-                "       (cat (cdr a) b)))");
+    interp_def ("(def (cat (a     ) (b list)) b)");
+    interp_def ("(def (cat (a cons) (b list))"
+                "  (cons (car a)"
+                "        (cat (cdr a) b)))");
 
-    interp_def ("('def (list a) (cons a (nil)))");
+    interp_def ("(def (list a) (cons a (nil)))");
 
-    interp_def ("('def (rev (L)))");
-    interp_def ("('def (rev (L cons))"
-                " (cat (rev (cdr L))"
-                "      (list (car L))))");
+    interp_def ("(def (rev (L)))");
+    interp_def ("(def (rev (L cons))"
+                "  (cat (rev (cdr L))"
+                "       (list (car L))))");
 
-    interp_def ("('def (map (f func) (L)))");
-    interp_def ("('def (map (f func) (L cons))"
-                " (cons (f (car L))"
-                "        (map f (cdr L))))");
+    interp_def ("(def (map (f func) (L)))");
+    interp_def ("(def (map (f func) (L cons))"
+                "  (cons (f (car L))"
+                "         (map f (cdr L))))");
 
     test_cases (out);
 
