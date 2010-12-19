@@ -10,13 +10,14 @@ typedef struct array_struct Array;
 
 
 #define AllocT( Type, capacity ) \
-    ((Type*) malloc ((capacity) * sizeof (Type)));
+    ((Type*) malloc ((capacity) * sizeof (Type)))
 
 #define InitArray( Type, arr, capacity ) \
     do { \
         (arr).n = 0; \
         (arr).N = capacity; \
         if (0 != (arr).N)  (arr).a = AllocT( Type, (arr).N ); \
+        else               (arr).a = 0; \
     } while (0)
 
 #if 0

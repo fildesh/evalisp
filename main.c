@@ -10,7 +10,6 @@ static Array Internal_Types;
 static Array Named_Types;
 static Array Named_Functions;
 
-
 typedef size_t pkey_t;
 
 #define NBitsInByte 8
@@ -21,11 +20,23 @@ static const pkey_t CALLBIT = HIGHBIT;
 #define HIGHBIT ((pkey_t)1 << (NBitsInByte * sizeof (unsigned) -1))
 static const unsigned WILDBIT = HIGHBIT;
 #undef HIGHBIT
-    /* static const char* NilTypeName = "nil"; */
-    /* static const char* AnyTypeName = "any"; */
+
 static pkey_t ScratchPKey;
-static const pkey_t AnyType = 0;
-static const pkey_t FunctionInternalType = 1;
+
+#define PtrToInt(p)  ((int) (size_t) (p))
+#define IntToPtr(i)  ((void*) (size_t) (i))
+
+enum known_types_enum
+{
+    AnyType,
+    FunctionInternalType,
+    CStringInternalType,
+    YesType,
+    NilType,
+    ConsType,
+    ListType,
+    NKnownTypes
+};
 
 #define StripPKey(k)  (k & ~(MUTABIT | CALLBIT))
 #define StripWildBit(k)  (k & ~WILDBIT)
@@ -220,6 +231,13 @@ num_type_members (pkey_t type)
 
 static
     void
+write_CString (FILE* out, const char* str)
+{
+    fputs (str, out);
+}
+
+static
+    void
 write_Pair (FILE* out, const Pair* pair)
 {
     pkey_t type;
@@ -257,7 +275,7 @@ static
     void
 write_Function (FILE* out, const Function* f)
 {
-    unsigned i;
+    unsigned i, nargs;
     if (SetOfFunc == f->type)
     {
         const FunctionSet* fs;
@@ -271,19 +289,22 @@ write_Function (FILE* out, const Function* f)
             write_Function (out, ARef( Function, *fs, i ));
         }
         fputc (')', out);
+        return;
     }
-    else
+
+    if (macro_func_P (f))  fputs ("(macro", out);
+    else                   fputs ("(func", out);
+
+    nargs = StripWildBit(f->nargs);
+    for (i = 0; i < nargs; ++i)
     {
-        fputs ("(func", out);
-        for (i = 0; i < f->nargs; ++i)
-        {
-            pkey_t t;
-            fputc (' ', out);
-            t = f->types[f->nargs -i -1];
-            fputs (type_info (t) -> name, out);
-        }
-        fputc (')', out);
+        pkey_t t;
+        fputc (' ', out);
+        if (macro_func_P (f))  t = AnyType;
+        else                   t = f->types[f->nargs -i -1];
+        fputs (type_info (t) -> name, out);
     }
+    fputc (')', out);
 }
 
 static
@@ -432,7 +453,10 @@ static
 funcall_fit_P (unsigned nargs, const Pair* args, const Function* f)
 {
     unsigned i;
+    if (vararg_func_P (f))  return 1;
+    if (macro_func_P (f))   return nargs == StripWildBit(f->nargs);
     if (nargs != f->nargs)  return 0;
+
     for (i = 0; i < nargs; ++i)
         if (!typeofP (StripPKey(args[i].key), f->types[i]))
             return 0;
@@ -620,6 +644,19 @@ eval1 (Runtime* run)
     }
 }
 
+static void eval1func (Runtime* run)
+{
+    int loopP = 1;
+    while (loopP)
+    {
+        Pair* expr;
+        expr = ARefLast( Pair, run->e );
+        if (funcallP (expr))
+            loopP = 0;
+        eval1 (run);
+    }
+}
+
 static void eval (Runtime* run)
 {
     while (run->e.n)  eval1 (run);
@@ -644,7 +681,8 @@ static Function* find_named_function (const char* name)
 static void copy_Function (Function* dst, const Function* src)
 {
     memcpy (dst, src, sizeof (Function));
-    dst->types = MemDup( pkey_t, src->types, src->nargs );
+    if (fixarg_func_P (src))
+        dst->types = MemDup( pkey_t, src->types, src->nargs );
     if (StandardFunc == src->type)
     {
         dst->info.std.exprs = MemDup(Pair,
@@ -675,7 +713,7 @@ static void cleanup_Function (Function* f)
         case InternalFunc:
         case ConstructFunc:
         case AccessFunc:
-            if (!vararg_func_P (f))
+            if (fixarg_func_P (f))
                 free (f->types);
             break;
         case SetOfFunc:
@@ -695,7 +733,8 @@ static void cleanup_NamedFunction (NamedFunction* namedfn)
 
 static void cleanup_TypeInfo (TypeInfo* info)
 {
-    free (info->name);
+    if (info->name)
+        free (info->name);
     if (StripWildBit(info->nmembs))
         free (info->types);
 }
@@ -760,7 +799,8 @@ static Function* add_named_function (const char* name, const Function* f)
         f_new = ARefLast( Function, *fset );
     }
     copy_Function (f_new, f);
-    reverse_types (f_new->nargs, f_new->types);
+    if (fixarg_func_P (f_new))
+        reverse_types (f_new->nargs, f_new->types);
     if (StandardFunc == f->type)
     {
         unsigned i;
@@ -772,21 +812,33 @@ static Function* add_named_function (const char* name, const Function* f)
     return f_new;
 }
 
-static pkey_t ensure_named_type (const char* name)
+static pkey_t force_init_type (const char* name)
 {
-    unsigned i;
     TypeInfo* info;
-    for (i = 0; i < Named_Types.n; ++i)
-        if (streqlP (ARef(TypeInfo, Named_Types, i)->name, name))
-            return i;
-
+    pkey_t typei;
+    typei = Named_Types.n;
     GrowArray( TypeInfo, Named_Types, 1 );
     info = ARefLast( TypeInfo, Named_Types );
-    info->name = MemDup( char, name, 1+strlen(name) );
+    if (name)  info->name = MemDup( char, name, 1+strlen(name) );
+    else       info->name = 0;
     info->nmembs = 0;
     set_simple_type_P (info, 0);
     info->types = &ScratchPKey;
-    return i;
+    return typei;
+}
+
+static pkey_t ensure_named_type (const char* name)
+{
+    unsigned i;
+    assert (name);
+    for (i = 0; i < Named_Types.n; ++i)
+    {
+        const char* str;
+        str = ARef(TypeInfo, Named_Types, i)->name;
+        if (str && streqlP (str, name))
+            return i;
+    }
+    return force_init_type (name);
 }
 
 static pkey_t add_simple_type (const TypeInfo* src, const char* const* membs)
@@ -844,7 +896,8 @@ add_internal_type (const char* name, const InternalTypeInfo* iinfo)
 {
     pkey_t typei;
     TypeInfo* info;
-    typei = ensure_named_type (name);
+    if (name)  typei = ensure_named_type (name);
+    else       typei = force_init_type (0);
     info = ARef( TypeInfo, Named_Types, typei );
     info->nmembs = Internal_Types.n;
     set_simple_type_P (info, 0);
@@ -858,9 +911,14 @@ static pkey_t find_named_type (const char* name)
 {
     unsigned i;
     for (i = 0; i < Named_Types.n; ++i)
-        if (streqlP (ARef(TypeInfo, Named_Types, i)->name, name))
+    {
+        const char* str;
+        str = ARef(TypeInfo, Named_Types, i)->name;
+        if (str && streqlP (str, name))
             return i;
+    }
     assert (0 && "Unknown type.");
+    return AnyType;
 }
 
 static void push_function (Runtime* run, const char* name, pkey_t nargs)
@@ -872,45 +930,6 @@ static void push_function (Runtime* run, const char* name, pkey_t nargs)
     assert (expr.val && "Function not found.");
     PushStack( Pair, run->e, &expr );
 }
-
-static void init_lisp ()
-{
-    const unsigned N = 1;
-    InitArray( TypeInfo, Named_Types, N );
-    InitArray( InternalTypeInfo, Internal_Types, N );
-    InitArray( NamedFunction, Named_Functions, N );
-
-    {
-            /* Add the /any/ type, it's hardcoded. */
-        pkey_t typei;
-        TypeInfo* info;
-        typei = ensure_named_type ("any");
-        info = ARef( TypeInfo, Named_Types, typei );
-        info->nmembs = 0;
-        set_simple_type_P (info, 0);
-        assert (AnyType == typei);
-    }
-
-    {   /* Add internal types. */
-        InternalTypeInfo internal;
-
-            /* internal.copy_fn = copy_FunctionSet; */
-            /* internal.cleanup_fn = cleanup_FunctionSet; */
-        internal.copy_fn = 0;
-        internal.free_fn = 0;
-        internal.write_fn =
-            (void (*) (FILE*, const void*)) &write_Function;
-        add_internal_type ("func", &internal);
-    }
-}
-
-static void cleanup_lisp ()
-{
-    CleanupArray( NamedFunction, Named_Functions );
-    CleanupArray( TypeInfo, Named_Types );
-    free (Internal_Types.a);
-}
-
 
 static unsigned parse_list (Array* arr, char* str)
 {
@@ -959,7 +978,7 @@ static unsigned parse_list (Array* arr, char* str)
                 diff = 0;
                 GrowArray( Pair, *arr, 1 );
                 tok = ARefLast( Pair, *arr );
-                tok->key = 0;
+                tok->key = CStringInternalType;
                 tok->val = &str[i];
             }
             ++ i;
@@ -982,9 +1001,10 @@ static unsigned parse_list (Array* arr, char* str)
 }
 
 
-static void interp_deftype (const char* str)
+static pkey_t interp_deftype (const char* str)
 {
     unsigned i;
+    pkey_t typei;
     TypeInfo info;
     Array types;
     Pair* node;
@@ -1059,7 +1079,7 @@ static void interp_deftype (const char* str)
         info.nmembs = types.n;
         info.types = (pkey_t*) types.a;
 
-        add_simple_type (&info, (const char**) membs.a);
+        typei = add_simple_type (&info, (const char**) membs.a);
 
         free (membs.a);
     }
@@ -1078,23 +1098,23 @@ static void interp_deftype (const char* str)
 
         if (3 == parsed.n)
         {
-            pkey_t type;
             const TypeInfo* chkinfo;
-            type = find_named_type (info.name);
-            chkinfo = type_info (type);
+            typei = find_named_type (info.name);
+            chkinfo = type_info (typei);
             assert (internal_type_P (chkinfo));
         }
         else
         {
             info.nmembs = types.n;
             info.types = (pkey_t*) types.a;
-            add_compound_type (&info);
+            typei = add_compound_type (&info);
         }
     }
 
     free (parsed.a);
     free (types.a);
     free (buf);
+    return typei;
 }
 
 static void interp_def (const char* str)
@@ -1130,11 +1150,8 @@ static void interp_def (const char* str)
     assert (func.nargs > 0);
     -- func.nargs;
 
-    if (func.nargs > 0)
-    {
-        InitArray( pkey_t, types,   func.nargs );
-        InitArray( char*,  formals, func.nargs );
-    }
+    InitArray( pkey_t, types,   func.nargs );
+    InitArray( char*,  formals, func.nargs );
 
     node = ARef( Pair, parsed, 3 );
     assert (!funcallP (node));
@@ -1264,12 +1281,65 @@ static void interp_def (const char* str)
     free (buf);
 }
 
+static unsigned parsed_to_sexpr (Pair* expr, const Array* parsed, unsigned i)
+{
+    Pair* node;
+    unsigned elemi, nelems;
+    assert (i < parsed->n && "ProgErr, overrunning sexpr parse.");
+    node = ARef( Pair, *parsed, i );
+    if (!funcallP (node))
+    {
+        expr->key = node->key;
+        expr->val = node->val;
+        return i+1;
+    }
+
+    nelems = StripPKey(expr->key);
+
+    for (elemi = 0; elemi < nelems; ++elemi)
+    {
+        expr->key = ConsType;
+        expr->val = AllocT( Pair, 2 );
+        expr = (Pair*) expr->val;
+
+        i = parsed_to_sexpr (&expr[0], parsed, i);
+        expr = &expr[1];
+    }
+
+    expr->key = NilType;
+    expr->val = 0;
+    return i;
+}
+
+static unsigned eval_macro (Runtime* run, const Array* parsed, unsigned i)
+{
+    Pair* expr;
+    unsigned nargs;
+    assert (run->e.n && "Nothing in expression stack.");
+    expr = ARefLast( Pair, run->e );
+    assert (funcallP (expr) && "No function call atop expression stack.");
+    nargs = StripPKey(expr->key);
+    while (nargs)
+    {
+        Pair* expr;
+        GrowArray( Pair, run->e, 1 );
+        expr = ARefLast( Pair, run->e );
+        i = parsed_to_sexpr (expr, parsed, i);
+        -- nargs;
+    }
+    eval1func (run);
+    expr = PopStack( Pair, run->d );
+    PushStack( Pair, run->e, expr );
+    return i;
+}
+
 static void parse_to_runtime (Runtime* run, const char* str)
 {
     unsigned i;
     Array parsed;
     const unsigned N = 1;
-    char* buf = AllocT( char, 1+ strlen (str) );
+    char* buf;
+    buf = AllocT( char, 1+ strlen (str) );
     strcpy (buf, str);
 
     InitArray( Pair, run->d, N );
@@ -1293,12 +1363,17 @@ static void parse_to_runtime (Runtime* run, const char* str)
 
             node = ARef( Pair, parsed, i );
             push_function (run, (char*) node->val, nargs);
+            if ('\'' == ((char*) node->val)[0])
+            {
+                i = eval_macro (run, &parsed, i+1);
+                -- i;
+            }
         }
         else
         {
             Pair pair;
                 /* Assume it's a function for now. */
-            pair.key = find_named_type ("func");
+            pair.key = FunctionInternalType;
             pair.val = find_named_function ((char*) node->val);
             assert (pair.val && "Function not found.");
             PushStack( Pair, run->e, &pair );
@@ -1391,8 +1466,108 @@ static void test_cases (FILE* out)
 
     assert_eql ("(yes)",
                 "(in (nil) (set (cons (yes) (cons (nil) (list (yes))))))");
+
+    assert_eql ("('int -5)",
+                "(- (+ ('int 1) ('int 1)) (+ ('int 2) ('int 5)))");
 }
 
+static void func_eql_fn (Pair* data)
+{
+    data[0].key = (data[1].val == data[0].val) ? YesType : NilType;
+}
+
+static void int_macro_fn (Pair* data)
+{
+    int res;
+    res = atoi ((char*) data->val);
+    data->key = find_named_type ("int");
+    data->val = IntToPtr(res);
+}
+
+static void write_int_fn (FILE* out, const void* val)
+{
+    int i;
+    i = (int) (size_t) val;
+    fprintf (out, "('int %d)", i);
+}
+
+static void int_add_fn (Pair* data)
+{
+    data[0].val = IntToPtr( PtrToInt(data[1].val) + PtrToInt(data[0].val) );
+}
+
+static void int_negate_fn (Pair* data)
+{
+    data[0].val = IntToPtr( - PtrToInt(data[0].val) );
+}
+
+static void int_zero_fn (Pair* data)
+{
+    data[0].key = (0 == PtrToInt(data[0].val)) ? YesType : NilType;
+}
+
+static void init_lisp ()
+{
+    const unsigned N = 1;
+    pkey_t typei;
+    InitArray( TypeInfo, Named_Types, N );
+    InitArray( InternalTypeInfo, Internal_Types, N );
+    InitArray( NamedFunction, Named_Functions, N );
+
+    {
+            /* Add the /any/ type, it's hardcoded. */
+        TypeInfo* info;
+        typei = ensure_named_type ("any");
+        info = ARef( TypeInfo, Named_Types, typei );
+        info->nmembs = 0;
+        set_simple_type_P (info, 0);
+        assert (AnyType == typei);
+    }
+
+    {   /* Add internal types. */
+        InternalTypeInfo internal;
+
+        internal.copy_fn = 0;
+        internal.free_fn = 0;
+        internal.write_fn =
+            (void (*) (FILE*, const void*)) &write_Function;
+        typei = add_internal_type ("func", &internal);
+        assert (FunctionInternalType == typei);
+
+        internal.write_fn =
+            (void (*) (FILE*, const void*)) &write_CString;
+        typei = add_internal_type (0, &internal);
+        assert (CStringInternalType == typei);
+    }
+
+    {
+        Function f;
+        pkey_t types[2];
+        f.nargs = 2;
+        types[0] = FunctionInternalType;
+        types[1] = FunctionInternalType;
+        f.types = types;
+        f.type = InternalFunc;
+        f.info.internal.f = &func_eql_fn;
+        add_named_function ("eql", &f);
+    }
+
+    typei = interp_deftype ("(deftype (yes))");
+    assert (YesType == typei);
+    typei = interp_deftype ("(deftype (nil))");
+    assert (NilType == typei);
+    typei = interp_deftype ("(deftype list cons nil)");
+    assert (ListType == typei);
+    typei = interp_deftype ("(deftype (cons car (cdr list)))");
+    assert (ConsType == typei);
+}
+
+static void cleanup_lisp ()
+{
+    CleanupArray( NamedFunction, Named_Functions );
+    CleanupArray( TypeInfo, Named_Types );
+    free (Internal_Types.a);
+}
 
 int main ()
 {
@@ -1400,20 +1575,6 @@ int main ()
     out = stdout;
     init_lisp ();
 
-    {
-        InternalTypeInfo internal;
-        internal.copy_fn = 0;
-        internal.free_fn = 0;
-        internal.write_fn = 0;
-        add_internal_type ("int", &internal);
-        interp_deftype ("(deftype int)");
-    }
-
-    interp_deftype ("(deftype (nil))");
-    interp_deftype ("(deftype (yes))");
-    interp_deftype ("(deftype (cons car (cdr list)))");
-
-    interp_deftype ("(deftype list cons nil)");
     interp_deftype ("(deftype bool yes nil)");
 
     interp_def ("(def (or (a yes) (b yes)) (yes))");
@@ -1481,6 +1642,46 @@ int main ()
                 "      (in e (cdr L))))");
     interp_def ("(def (in e (S set))"
                 "  (in e (elements S)))");
+
+    {
+            /* Add some internal integer stuff. */
+        InternalTypeInfo internal;
+        Function f;
+        pkey_t typei;
+        pkey_t types[2];
+
+        internal.copy_fn = 0;
+        internal.free_fn = 0;
+        internal.write_fn = &write_int_fn;
+        add_internal_type ("int", &internal);
+        typei = interp_deftype ("(deftype int)");
+
+        f.nargs = 1;
+        f.type = InternalFunc;
+        set_macro_func_P (&f, 1);
+        f.info.internal.f = &int_macro_fn;
+        add_named_function ("'int", &f);
+
+        f.nargs = 2;
+        types[0] = typei;
+        types[1] = typei;
+        f.types = types;
+        f.info.internal.f = &int_add_fn;
+        add_named_function ("+", &f);
+
+        f.nargs = 1;
+        f.info.internal.f = &int_negate_fn;
+        add_named_function ("-", &f);
+
+        f.nargs = 1;
+        f.info.internal.f = &int_zero_fn;
+        add_named_function ("zero", &f);
+    }
+
+    interp_def ("(def (- (a int) (b int))"
+                "  (+ a (- b)))");
+    interp_def ("(def (eql (a int) (b int))"
+                "  (zero (- a b)))");
 
     test_cases (out);
 
