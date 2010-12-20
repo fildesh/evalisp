@@ -23,13 +23,14 @@ static const unsigned WILDBIT = HIGHBIT;
 
 static pkey_t ScratchPKey;
 
-#define PtrToInt(p)  ((int) (size_t) (p))
-#define IntToPtr(i)  ((void*) (size_t) (i))
+#define PtrTo(Type, p)  ((Type) (size_t) (p))
+#define ToPtr(i)  ((void*) (size_t) (i))
 
 enum known_types_enum
 {
     AnyType,
     FunctionInternalType,
+    VarArgInternalType,
     CStringInternalType,
     YesType,
     NilType,
@@ -75,7 +76,8 @@ struct function_struct
         } std;
         struct function_struct_internal_case
         {
-            void (* f) (Pair*);
+            void (* f) (Pair*, void*);
+            void* extra;
         } internal;
         struct function_struct_type_case
         {
@@ -575,7 +577,7 @@ eval1 (Runtime* run)
             GrowArray( Pair, run->d, 1 );
             dsk = ARefLast( Pair, run->d );
                 /* This is a built-in function. */
-            (f->info.internal.f) (dsk);
+            (f->info.internal.f) (dsk, f->info.internal.extra);
         }
         else if (ConstructFunc == f->type)
         {
@@ -1286,15 +1288,15 @@ static unsigned parsed_to_sexpr (Pair* expr, const Array* parsed, unsigned i)
     Pair* node;
     unsigned elemi, nelems;
     assert (i < parsed->n && "ProgErr, overrunning sexpr parse.");
-    node = ARef( Pair, *parsed, i );
+    node = ARef( Pair, *parsed, i++ );
     if (!funcallP (node))
     {
         expr->key = node->key;
         expr->val = node->val;
-        return i+1;
+        return i;
     }
 
-    nelems = StripPKey(expr->key);
+    nelems = StripPKey(node->key);
 
     for (elemi = 0; elemi < nelems; ++elemi)
     {
@@ -1471,39 +1473,38 @@ static void test_cases (FILE* out)
                 "(- (+ ('int 1) ('int 1)) (+ ('int 2) ('int 5)))");
 }
 
-static void func_eql_fn (Pair* data)
+static void func_eql_fn (Pair* data, void* extra)
 {
+    (void) extra;
     data[0].key = (data[1].val == data[0].val) ? YesType : NilType;
 }
 
-static void int_macro_fn (Pair* data)
+static void int_macro_fn (Pair* data, void* int_types)
 {
     int res;
     res = atoi ((char*) data->val);
-    data->key = find_named_type ("int");
-    data->val = IntToPtr(res);
+    data->key = ((pkey_t*) int_types)[(0 == res) ? 0 : 1];
+    data->val = ToPtr(res);
 }
 
 static void write_int_fn (FILE* out, const void* val)
 {
     int i;
-    i = (int) (size_t) val;
+    i = PtrTo(int, val);
     fprintf (out, "('int %d)", i);
 }
 
-static void int_add_fn (Pair* data)
+static void int_add_fn (Pair* data, void* zero_typei)
 {
-    data[0].val = IntToPtr( PtrToInt(data[1].val) + PtrToInt(data[0].val) );
+    data[0].val = ToPtr( PtrTo(int, data[1].val) + PtrTo(int, data[0].val) );
+    if (!data[0].val)
+        data[0].key = PtrTo(pkey_t, zero_typei);
 }
 
-static void int_negate_fn (Pair* data)
+static void int_negate_fn (Pair* data, void* extra)
 {
-    data[0].val = IntToPtr( - PtrToInt(data[0].val) );
-}
-
-static void int_zero_fn (Pair* data)
-{
-    data[0].key = (0 == PtrToInt(data[0].val)) ? YesType : NilType;
+    (void) extra;
+    data[0].val = ToPtr( - PtrTo(int, data[0].val) );
 }
 
 static void init_lisp ()
@@ -1533,6 +1534,10 @@ static void init_lisp ()
             (void (*) (FILE*, const void*)) &write_Function;
         typei = add_internal_type ("func", &internal);
         assert (FunctionInternalType == typei);
+
+        internal.write_fn = 0;
+        typei = add_internal_type ("'", &internal);
+        assert (VarArgInternalType == typei);
 
         internal.write_fn =
             (void (*) (FILE*, const void*)) &write_CString;
@@ -1603,7 +1608,6 @@ int main ()
     interp_def ("(def (if (a    ) b c) c)");
     interp_def ("(def (if (a yes) b c) b)");
 
-
     interp_def ("(def (eql (a cons) (b     )))");
     interp_def ("(def (eql (a     ) (b cons)))");
     interp_def ("(def (eql (a cons) (b cons))"
@@ -1628,7 +1632,7 @@ int main ()
                 "         (map f (cdr L))))");
 
     interp_def ("(def (consif (pred func) e L)"
-                "   (if (pred e) (cons e L) L))");
+                "  (if (pred e) (cons e L) L))");
 
     interp_def ("(def (filter (f func) (L)))");
     interp_def ("(def (filter (f func) (L cons))"
@@ -1644,39 +1648,49 @@ int main ()
                 "  (in e (elements S)))");
 
     {
+        static pkey_t int_types[2];
             /* Add some internal integer stuff. */
         InternalTypeInfo internal;
+        pkey_t int_typei;
         Function f;
-        pkey_t typei;
         pkey_t types[2];
 
         internal.copy_fn = 0;
         internal.free_fn = 0;
         internal.write_fn = &write_int_fn;
-        add_internal_type ("int", &internal);
-        typei = interp_deftype ("(deftype int)");
+        int_types[0] = add_internal_type ("zero", &internal);
+        int_types[1] = add_internal_type ("nonzero-int", &internal);
+        int_typei    = interp_deftype ("(deftype int zero nonzero-int)");
 
         f.nargs = 1;
         f.type = InternalFunc;
         set_macro_func_P (&f, 1);
         f.info.internal.f = &int_macro_fn;
+        f.info.internal.extra = int_types;
         add_named_function ("'int", &f);
 
         f.nargs = 2;
-        types[0] = typei;
-        types[1] = typei;
+        types[0] = int_types[1];
+        types[1] = int_types[1];
         f.types = types;
         f.info.internal.f = &int_add_fn;
+        f.info.internal.extra = ToPtr(int_types[0]);
         add_named_function ("+", &f);
 
         f.nargs = 1;
+        types[0] = int_types[1];
         f.info.internal.f = &int_negate_fn;
         add_named_function ("-", &f);
-
-        f.nargs = 1;
-        f.info.internal.f = &int_zero_fn;
-        add_named_function ("zero", &f);
     }
+
+    interp_def ("(def (+ (a zero) (b zero)) a)");
+    interp_def ("(def (+ (a zero) (b nonzero-int)) b)");
+    interp_def ("(def (+ (a nonzero-int) (b zero)) a)");
+
+    interp_def ("(def (- (a zero)) a)");
+
+    interp_def ("(def (zero (a zero)) (yes))");
+    interp_def ("(def (zero (a nonzero-int)))");
 
     interp_def ("(def (- (a int) (b int))"
                 "  (+ a (- b)))");
