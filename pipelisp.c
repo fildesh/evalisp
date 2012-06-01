@@ -1,5 +1,5 @@
 
-#include "cx/table.h"
+#include "cx/fileb.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -7,22 +7,37 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "array.h"
+typedef struct Pair Pair;
+typedef struct Function Function;
+typedef struct NamedFunction NamedFunction;
+typedef struct Runtime Runtime;
+typedef struct TypeInfo TypeInfo;
+typedef struct InternalTypeInfo InternalTypeInfo;
 
 typedef size_t pkey_t;
 
-#define HIGHBIT ((pkey_t)1 << (NBits_byte * sizeof (pkey_t) -1))
-static const pkey_t MUTABIT = HIGHBIT >> 1;
-static const pkey_t CALLBIT = HIGHBIT;
-#undef HIGHBIT
-#define HIGHBIT ((pkey_t)1 << (NBits_byte * sizeof (unsigned) -1))
-static const unsigned WILDBIT = HIGHBIT;
-#undef HIGHBIT
 
-static pkey_t ScratchPKey;
+DeclTableT( Pair, Pair );
+DeclTableT( Function, Function );
+typedef TableT(Function) FunctionSet;
+DeclTableT( NamedFunction, NamedFunction );
+DeclTableT( TypeInfo, TypeInfo );
+DeclTableT( InternalTypeInfo, InternalTypeInfo );
 
-#define PtrTo(Type, p)  ((Type) (size_t) (p))
-#define ToPtr(i)  ((void*) (size_t) (i))
+DeclTableT( pkey_t, pkey_t );
+#ifndef DeclTableT_uint
+#define DeclTableT_uint
+DeclTableT( uint, uint );
+#endif
+#ifndef DeclTableT_cstr
+#define DeclTableT_cstr
+DeclTableT( cstr, char* );
+#endif
+#ifndef DeclTableT_ccstr
+#define DeclTableT_ccstr
+DeclTableT( ccstr, const char* );
+#endif
+
 
 enum known_types_enum
 {
@@ -37,29 +52,25 @@ enum known_types_enum
     NKnownTypes
 };
 
-#define StripPKey(k)  (k & ~(MUTABIT | CALLBIT))
-#define StripWildBit(k)  (k & ~WILDBIT)
 
-struct pair_struct
-{
-    pkey_t key;
-    void*  val;
-};
-typedef struct pair_struct Pair;
-DeclTableT( Pair, Pair );
-
-enum function_type_enum
+enum FunctionType
 {
     StandardFunc, InternalFunc,
     ConstructFunc, AccessFunc,
     SetOfFunc,
     PendingDefFunc, NFuncTypes
 };
-typedef enum function_type_enum FunctionType;
+typedef enum FunctionType FunctionType;
 
-typedef Array FunctionSet;
 
-struct function_struct
+
+struct Pair
+{
+    pkey_t key;
+    void*  val;
+};
+
+struct Function
 {
     unsigned nargs;
     pkey_t*  types;
@@ -86,9 +97,10 @@ struct function_struct
         {
             unsigned idx;
         } access;
+            /* TODO: Unused.*/
         struct function_struct_pending_case
         {
-            Array parsed;
+            TableT(Pair) parsed;
         } pending;
         struct function_struct_multi_case
         {
@@ -96,45 +108,52 @@ struct function_struct
         } set;
     } info;
 };
-typedef struct function_struct Function;
 
-struct named_function_struct
+struct NamedFunction
 {
     char* name;
     Function* f;
 };
-typedef struct named_function_struct NamedFunction;
-DeclTableT( NamedFunction, NamedFunction );
 
-struct runtime_struct
+struct Runtime
 {
     TableT(Pair) d; /* Data stack.*/
     TableT(Pair) e; /* Expression stack.*/
 };
-typedef struct runtime_struct Runtime;
 
-struct type_info_struct
+struct TypeInfo
 {
     char* name;
     unsigned nmembs;
     pkey_t* types;
 };
-typedef struct type_info_struct TypeInfo;
-DeclTableT( TypeInfo, TypeInfo );
 
-struct internal_type_info_struct
+struct InternalTypeInfo
 {
     void* (* copy_fn) (const void*);
     void  (* free_fn) (void*);
     void (* write_fn) (FILE*, const void*);
 };
-typedef struct internal_type_info_struct InternalTypeInfo;
-DeclTableT( InternalTypeInfo, InternalTypeInfo );
 
 
+static pkey_t ScratchPKey;
 static TableT(InternalTypeInfo) Internal_Types;
 static TableT(TypeInfo) Named_Types;
 static TableT(NamedFunction) Named_Functions;
+
+#define HIGHBIT ((pkey_t)1 << (NBits_byte * sizeof (pkey_t) -1))
+static const pkey_t MUTABIT = HIGHBIT >> 1;
+static const pkey_t CALLBIT = HIGHBIT;
+#undef HIGHBIT
+#define StripPKey(k)  (k & ~(MUTABIT | CALLBIT))
+
+#define HIGHBIT ((pkey_t)1 << (NBits_byte * sizeof (uint) -1))
+static const uint WILDBIT = HIGHBIT;
+#undef HIGHBIT
+#define StripWildBit(k)  (k & ~WILDBIT)
+
+#define PtrTo(Type, p)  ((Type) (size_t) (p))
+#define ToPtr(i)  ((void*) (size_t) (i))
 
 
 static int streqlP (const char* a, const char* b)
@@ -293,10 +312,10 @@ write_Function (FILE* out, const Function* f)
         name = "funcs";
         fprintf (out, "(%s", name);
         fs = &f->info.set.funcs;
-        for (i = 0; i < fs->n; ++i)
+        for (i = 0; i < fs->sz; ++i)
         {
             fputc (' ', out);
-            write_Function (out, ARef( Function, *fs, i ));
+            write_Function (out, &fs->s[i]);
         }
         fputc (')', out);
         return;
@@ -490,9 +509,9 @@ find_function (unsigned nargs, const Pair* args, const Function* f)
     {
         const FunctionSet* fset;
         fset = &f->info.set.funcs;
-        for (i = 0; i < fset->n; ++i)
+        for (i = 0; i < fset->sz; ++i)
         {
-            f = ARef(Function, *fset, i);
+            f = &fset->s[i];
             if (funcall_fit_P (nargs, args, f))  return f;
         }
         return 0;
@@ -695,13 +714,13 @@ static void copy_Function (Function* dst, const Function* src)
 {
     memcpy (dst, src, sizeof (Function));
     if (fixarg_func_P (src))
-        dst->types = MemDup( pkey_t, src->types, src->nargs );
+        dst->types = DupliT( pkey_t, src->types, src->nargs );
     if (StandardFunc == src->type)
     {
-        dst->info.std.exprs = MemDup(Pair,
+        dst->info.std.exprs = DupliT(Pair,
                                      src->info.std.exprs,
                                      src->info.std.nexprs);
-        dst->info.std.argmap = MemDup(unsigned,
+        dst->info.std.argmap = DupliT(unsigned,
                                       src->info.std.argmap,
                                       2*src->info.std.nsubst);
     }
@@ -710,9 +729,9 @@ static void copy_Function (Function* dst, const Function* src)
 #if 0
 static void copy_TypeInfo (TypeInfo* dst, const TypeInfo* src)
 {
-    dst->name   = MemDup( char, src->name, 1+strlen(src->name) );
+    dst->name   = DupliT( char, src->name, 1+strlen(src->name) );
     dst->nmembs = src->nmembs;
-    dst->types  = MemDup( pkey_t, src->types, StripWildBit(src->nmembs) );
+    dst->types  = DupliT( pkey_t, src->types, StripWildBit(src->nmembs) );
 }
 #endif
 
@@ -730,7 +749,10 @@ static void cleanup_Function (Function* f)
                 free (f->types);
             break;
         case SetOfFunc:
-            CleanupArray( Function, f->info.set.funcs );
+            { BLoop( i, f->info.set.funcs.sz )
+                cleanup_Function (&f->info.set.funcs.s[i]);
+            } BLose()
+            LoseTable( f->info.set.funcs );
             break;
         default:
             break;
@@ -769,7 +791,7 @@ static Function* force_init_named_function (const char* name)
     Function* f;
     DeclGrow1Table( NamedFunction, namedfn, Named_Functions );
 
-    namedfn->name = MemDup(char, name, 1+strlen(name));
+    namedfn->name = dup_cstr (name);
     namedfn->f = AllocT( Function, 1 );
     f = namedfn->f;
     f->type = PendingDefFunc;
@@ -796,19 +818,16 @@ static Function* add_named_function (const char* name, const Function* f)
     if (PendingDefFunc != f_new->type
         &&   SetOfFunc != f_new->type)
     {
-        Function tmp;
-        memcpy (&tmp, f_new, sizeof (Function));
-        InitArray( Function, f_new->info.set.funcs, 2 );
-        PushStack( Function, f_new->info.set.funcs, &tmp );
+        Function tmp = *f_new;
+        InitTable( f_new->info.set.funcs );
+        PushTable( f_new->info.set.funcs, tmp );
         f_new->type = SetOfFunc;
     }
 
     if (SetOfFunc == f_new->type)
     {
-        FunctionSet* fset;
-        fset = &f_new->info.set.funcs;
-        GrowArray( Function, *fset, 1 );
-        f_new = ARefLast( Function, *fset );
+        FunctionSet* fset = &f_new->info.set.funcs;
+        f_new = Grow1Table( *fset );
     }
     copy_Function (f_new, f);
     if (fixarg_func_P (f_new))
@@ -829,7 +848,7 @@ static pkey_t force_init_type (const char* name)
     DeclGrow1Table( TypeInfo, info, Named_Types );
     pkey_t typei = Named_Types.sz - 1;
 
-    if (name)  info->name = MemDup( char, name, 1+strlen(name) );
+    if (name)  info->name = dup_cstr (name);
     else       info->name = 0;
     info->nmembs = 0;
     set_simple_type_P (info, 0);
@@ -868,7 +887,7 @@ static pkey_t add_simple_type (const TypeInfo* src, const char* const* membs)
     add_named_function (src->name, &f);
 
     dst->nmembs = src->nmembs;
-    dst->types  = MemDup(pkey_t, src->types, src->nmembs);
+    dst->types  = DupliT(pkey_t, src->types, src->nmembs);
     reverse_types (dst->nmembs, dst->types);
 
     f.nargs = 1;
@@ -894,7 +913,7 @@ static pkey_t add_compound_type (const TypeInfo* src)
 
     dst->nmembs = src->nmembs;
     set_simple_type_P (dst, 0);
-    dst->types  = MemDup(pkey_t, src->types, src->nmembs);
+    dst->types  = DupliT(pkey_t, src->types, src->nmembs);
     
     assert (compound_type_P (dst));
     return type;
@@ -941,7 +960,9 @@ static void push_function (Runtime* run, const char* name, pkey_t nargs)
     PushTable( run->e, expr );
 }
 
-static unsigned parse_list (Array* arr, char* str)
+static
+    uint
+parse_list (TableT(Pair)* t, char* str)
 {
     unsigned i = 1;
     unsigned nmemb = 0;  /* #args + 1 */
@@ -951,8 +972,8 @@ static unsigned parse_list (Array* arr, char* str)
     if (str[0] != '(')  return 0;
     str[0] = 0;
 
-    toki = arr->n;
-    GrowArray( Pair, *arr, 1 );
+    toki = t->sz;
+    GrowTable( *t, 1 );
 
     while (1)
     {
@@ -975,7 +996,7 @@ static unsigned parse_list (Array* arr, char* str)
         else if (str[i] == '(')
         {
             ++ nmemb;
-            diff = parse_list (arr, &str[i]);
+            diff = parse_list (t, &str[i]);
             if (!diff)  break;
             i += diff;
         }
@@ -983,11 +1004,9 @@ static unsigned parse_list (Array* arr, char* str)
         {
             if (diff)
             {
-                Pair* tok;
+                DeclGrow1Table( Pair, tok, *t );
                 ++ nmemb;
                 diff = 0;
-                GrowArray( Pair, *arr, 1 );
-                tok = ARefLast( Pair, *arr );
                 tok->key = CStringInternalType;
                 tok->val = &str[i];
             }
@@ -997,15 +1016,15 @@ static unsigned parse_list (Array* arr, char* str)
 
     if (diff)
     {
-        Pair* fntok = ARef( Pair, *arr, toki );
+        Pair* fntok = &t->s[toki];
         fntok->key = nmemb;
         set_funcall_P (fntok, 1);
-        fntok->val = (void*) (arr->n - (size_t) fntok->val);
+        fntok->val = (void*) (t->sz - (size_t) fntok->val);
     }
     else
     {
             /* If there was a failure, revert parse tree. */
-        arr->n = toki;
+        t->sz = toki;
     }
     return diff;
 }
@@ -1016,56 +1035,51 @@ static pkey_t interp_deftype (const char* str)
     unsigned i;
     pkey_t typei;
     TypeInfo info;
-    Array types;
+    DeclTable( pkey_t, types );
     Pair* node;
-    Array parsed;
-    char* buf;
-    buf = MemDup( char, str, 1+ strlen (str) );
+    DeclTable( Pair, parsed );
+    char* buf = dup_cstr (str);
 
-    InitArray( Pair, parsed, 1 );
-    InitArray( Pair, types, 1 );
-    
     i = parse_list (&parsed, buf);
     assert (i && "Parse failed.");
     assert (!str[i]);
 
-    assert (parsed.n > 1);
+    assert (parsed.sz > 1);
 
-    node = ARef( Pair, parsed, 0 );
+    node = &parsed.s[0];
     assert (funcallP (node) && "Plain value at toplevel?!");
 
-    node = ARef( Pair, parsed, 1 );
+    node = &parsed.s[1];
     assert (streqlP ("deftype", (char*)node->val));
 
-    node = ARef( Pair, parsed, 2 );
+    node = &parsed.s[2];
     if (funcallP (node))
     {
-        Array membs;
-        InitArray( Pair, membs, 1 );
+        DeclTable( ccstr, membs );
 
-        node = ARef( Pair, parsed, 0 );
+        node = &parsed.s[0];
         assert (2 == StripPKey(node->key));
 
-        node = ARef( Pair, parsed, 3 );
+        node = &parsed.s[3];
 
         info.name = (char*) node->val;
 
-        for (i = 4; i < parsed.n; ++i)
+        for (i = 4; i < parsed.sz; ++i)
         {
             const char* membstr;
             const char* typestr;
-            node = ARef( Pair, parsed, i );
+            node = &parsed.s[i];
             if (funcallP (node))
             {
                 unsigned nelems;
                 nelems = StripPKey(node->key);
                 assert (2 == nelems && "Missing type for type param!");
 
-                node = ARef( Pair, parsed, ++i );
+                node = &parsed.s[++i];
                 assert (!funcallP (node));
                 membstr = (char*) node->val;
 
-                node = ARef( Pair, parsed, ++i );
+                node = &parsed.s[++i];
                 typestr = (char*) node->val;
             }
             else
@@ -1074,32 +1088,32 @@ static pkey_t interp_deftype (const char* str)
                 typestr = "any";
             }
 
-            dPushStack( const char*, membs, membstr );
-            dPushStack( pkey_t, types, ensure_named_type (typestr) );
+            PushTable( membs, membstr );
+            PushTable( types, ensure_named_type (typestr) );
         }
 
-        assert (membs.n == types.n);
-        info.nmembs = types.n;
-        info.types = (pkey_t*) types.a;
+        assert (membs.sz == types.sz);
+        info.nmembs = types.sz;
+        info.types = types.s;
 
-        typei = add_simple_type (&info, (const char**) membs.a);
+        typei = add_simple_type (&info, membs.s);
 
-        free (membs.a);
+        LoseTable( membs );
     }
     else
     {
         info.name = (char*) node->val;
 
-        for (i = 3; i < parsed.n; ++i)
+        for (i = 3; i < parsed.sz; ++i)
         {
             const char* typestr;
-            node = ARef( Pair, parsed, i );
+            node = &parsed.s[i];
             assert (!funcallP (node));
             typestr = (char*) node->val;
-            dPushStack( pkey_t, types, ensure_named_type (typestr) );
+            PushTable( types, ensure_named_type (typestr) );
         }
 
-        if (3 == parsed.n)
+        if (3 == parsed.sz)
         {
             const TypeInfo* chkinfo;
             typei = find_named_type (info.name);
@@ -1108,14 +1122,14 @@ static pkey_t interp_deftype (const char* str)
         }
         else
         {
-            info.nmembs = types.n;
-            info.types = (pkey_t*) types.a;
+            info.nmembs = types.sz;
+            info.types = types.s;
             typei = add_compound_type (&info);
         }
     }
 
-    free (parsed.a);
-    free (types.a);
+    LoseTable( parsed );
+    LoseTable( types );
     free (buf);
     return typei;
 }
@@ -1126,37 +1140,34 @@ static void interp_def (const char* str)
     char* funcname;
     unsigned i;
     Function func;
-    Array parsed, types, formals, exprs, argmap;
+    DeclTable( Pair, parsed );
+    DeclTable( pkey_t, types );
+    DeclTable( cstr, formals );
+    DeclTable( Pair, exprs );
+    DeclTable( uint, argmap );
     Pair* node;
-    char* buf;
-    buf = MemDup( char, str, 1+ strlen (str) );
+    char* buf = dup_cstr (str);
 
-    InitArray( Pair,     parsed,  1 );
-    InitArray( Pair,     exprs,   1 );
-    InitArray( unsigned, argmap,  1 );
     
     i = parse_list (&parsed, buf);
     assert (i && "Parse failed.");
 
-    assert (parsed.n > 1);
+    assert (parsed.sz > 1);
 
-    node = ARef( Pair, parsed, 0 );
+    node = &parsed.s[0];
     assert (funcallP (node));
     assert (2 == StripPKey(node->key) || 3 == StripPKey(node->key));
 
-    node = ARef( Pair, parsed, 1 );
+    node = &parsed.s[1];
     assert (streqlP ("def", (char*) node->val));
 
-    node = ARef( Pair, parsed, 2 );
+    node = &parsed.s[2];
     assert (funcallP (node) && "Non-functions not supported yet in def's.");
     func.nargs = StripPKey(node->key);
     assert (func.nargs > 0);
     -- func.nargs;
 
-    InitArray( pkey_t, types,   func.nargs );
-    InitArray( char*,  formals, func.nargs );
-
-    node = ARef( Pair, parsed, 3 );
+    node = &parsed.s[3];
     assert (!funcallP (node));
     funcname = (char*) node->val;
 
@@ -1168,11 +1179,11 @@ static void interp_def (const char* str)
     if (macro_func_P (&func))
         assert (1 == func.nargs && "Macros only take one list argument.");
 
-    for (i = formals_offset; types.n < func.nargs; ++i)
+    for (i = formals_offset; types.sz < func.nargs; ++i)
     {
         const char* typestr;
         char* formalstr;
-        node = ARef( Pair, parsed, i );
+        node = &parsed.s[i];
         
             /* TODO: macros */
         if (macro_func_P (&func))
@@ -1184,11 +1195,11 @@ static void interp_def (const char* str)
             nelems = StripPKey(node->key);
             assert (2 == nelems && "Missing type for func param!");
 
-            node = ARef( Pair, parsed, ++i );
+            node = &parsed.s[++i];
             assert (!funcallP (node) && "(def ((name) arg1 arg2)) ?!");
             formalstr = (char*) node->val;
 
-            node = ARef( Pair, parsed, ++i );
+            node = &parsed.s[++i];
             typestr = (char*) node->val;
         }
         else
@@ -1197,17 +1208,17 @@ static void interp_def (const char* str)
             formalstr = (char*) node->val;
         }
 
-        dPushStack( pkey_t, types, find_named_type (typestr) );
-        dPushStack( char*, formals, formalstr );
+        PushTable( types, find_named_type (typestr) );
+        PushTable( formals, formalstr );
     }
 
-    for (; i < parsed.n; ++i)
+    for (; i < parsed.sz; ++i)
     {
         unsigned argi;
         const char* symname;
         Pair expr;
 
-        node = ARef( Pair, parsed, i );
+        node = &parsed.s[i];
         if (funcallP (node))
         {
             expr.key = StripPKey(node->key);
@@ -1215,7 +1226,7 @@ static void interp_def (const char* str)
             expr.key = (expr.key - 1);
             set_funcall_P (&expr, 1);
 
-            node = ARef( Pair, parsed, ++i );
+            node = &parsed.s[++i];
         }
         else
         {
@@ -1225,14 +1236,14 @@ static void interp_def (const char* str)
         assert (!funcallP (node));
         symname = (char*) node->val;
 
-        for (argi = 0; argi < formals.n; ++argi)
-            if (streqlP (symname, dARef( char*, formals, argi )))
+        for (argi = 0; argi < formals.sz; ++argi)
+            if (streqlP (symname, formals.s[argi]))
                 break;
 
-        if (argi < formals.n)
+        if (argi < formals.sz)
         {
-            dPushStack( unsigned, argmap, exprs.n );
-            dPushStack( unsigned, argmap, argi );
+            PushTable( argmap, exprs.sz );
+            PushTable( argmap, argi );
         }
         else
         {
@@ -1240,10 +1251,10 @@ static void interp_def (const char* str)
             assert (expr.val && "Function not found.");
         }
 
-        PushStack( Pair, exprs, &expr );
+        PushTable( exprs, expr );
     }
 
-    if (0 == exprs.n)
+    if (0 == exprs.sz)
     {
         Pair expr;
         fputs ("!! No return value, assuming (nil).\n", stderr);
@@ -1251,39 +1262,43 @@ static void interp_def (const char* str)
         set_funcall_P (&expr, 1);
         expr.val = find_named_function ("nil");
         assert (expr.val && "Function not found.");
-        PushStack( Pair, exprs, &expr );
+        PushTable( exprs, expr );
     }
 
     if (StandardFunc == func.type)
     {
-        func.types = (pkey_t*) types.a;
-        func.info.std.nexprs = exprs.n;
-        func.info.std.nsubst = argmap.n / 2;
-        func.info.std.exprs = (Pair*) exprs.a;
-        func.info.std.argmap = (unsigned*) argmap.a;
+        func.types = types.s;
+        func.info.std.nexprs = exprs.sz;
+        func.info.std.nsubst = argmap.sz / 2;
+        func.info.std.exprs = exprs.s;
+        func.info.std.argmap = argmap.s;
     }
     add_named_function (funcname, &func);
 
-    free (parsed.a);
+    LoseTable( parsed );
     if (func.nargs > 0)
     {
-            /* free (types.a); */
-        free (formals.a);
+            /* Don't: */
+            /* LoseTable(types); */
+        LoseTable( formals );
     }
     cleanup_Function (&func);
-    /*
-    free (exprs.a);
-    free (argmap.a);
-    */
+
+        /* Don't: */
+        /* LoseTable( exprs ); */
+        /* LoseTable( argmap ); */
+
     free (buf);
 }
 
-static unsigned parsed_to_sexpr (Pair* expr, const Array* parsed, unsigned i)
+static
+    uint
+parsed_to_sexpr (Pair* expr, const TableT(Pair)* parsed, unsigned i)
 {
     Pair* node;
     unsigned elemi, nelems;
-    assert (i < parsed->n && "ProgErr, overrunning sexpr parse.");
-    node = ARef( Pair, *parsed, i++ );
+    assert (i < parsed->sz && "ProgErr, overrunning sexpr parse.");
+    node = &parsed->s[i++];
     if (!funcallP (node))
     {
         expr->key = node->key;
@@ -1308,7 +1323,9 @@ static unsigned parsed_to_sexpr (Pair* expr, const Array* parsed, unsigned i)
     return i;
 }
 
-static unsigned eval_macro (Runtime* run, const Array* parsed, unsigned i)
+static
+    uint
+eval_macro (Runtime* run, const TableT(Pair)* parsed, unsigned i)
 {
     Pair* expr;
     unsigned nargs;
@@ -1331,23 +1348,19 @@ static unsigned eval_macro (Runtime* run, const Array* parsed, unsigned i)
 static void parse_to_runtime (Runtime* run, const char* str)
 {
     unsigned i;
-    Array parsed;
-    const unsigned N = 1;
-    char* buf;
-    buf = AllocT( char, 1+ strlen (str) );
-    strcpy (buf, str);
+    DeclTable( Pair, parsed );
+    char* buf = dup_cstr (str);
 
     InitTable( run->d );
     InitTable( run->e );
-    InitArray( Pair, parsed, N );
 
     i = parse_list (&parsed, buf);
     assert (i && "Parse failed.");
 
-    for (i = 0; i < parsed.n; ++i)
+    for (i = 0; i < parsed.sz; ++i)
     {
         Pair* node;
-        node = ARef( Pair, parsed, i );
+        node = &parsed.s[i];
         if (funcallP (node))
         {
             unsigned nargs;
@@ -1356,7 +1369,7 @@ static void parse_to_runtime (Runtime* run, const char* str)
             assert (nargs);
             -- nargs;
 
-            node = ARef( Pair, parsed, i );
+            node = &parsed.s[i];
             push_function (run, (char*) node->val, nargs);
             if ('\'' == ((char*) node->val)[0])
             {
@@ -1374,7 +1387,7 @@ static void parse_to_runtime (Runtime* run, const char* str)
             PushTable( run->e, pair );
         }
     }
-    free (parsed.a);
+    LoseTable( parsed );
     free (buf);
 }
 
@@ -1500,7 +1513,6 @@ static void int_negate_fn (Pair* data, void* extra)
 
 static void init_lisp ()
 {
-    const unsigned N = 1;
     pkey_t typei;
     InitTable( Named_Types );
     InitTable( Internal_Types );
