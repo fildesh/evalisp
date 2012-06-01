@@ -8,9 +8,6 @@
 #include <string.h>
 
 #include "array.h"
-static Array Internal_Types;
-static Array Named_Types;
-static Array Named_Functions;
 
 typedef size_t pkey_t;
 
@@ -49,6 +46,7 @@ struct pair_struct
     void*  val;
 };
 typedef struct pair_struct Pair;
+DeclTableT( Pair, Pair );
 
 enum function_type_enum
 {
@@ -106,11 +104,12 @@ struct named_function_struct
     Function* f;
 };
 typedef struct named_function_struct NamedFunction;
+DeclTableT( NamedFunction, NamedFunction );
 
 struct runtime_struct
 {
-    Array d; /* Data stack. */
-    Array e; /* Expression stack. */
+    TableT(Pair) d; /* Data stack.*/
+    TableT(Pair) e; /* Expression stack.*/
 };
 typedef struct runtime_struct Runtime;
 
@@ -121,6 +120,7 @@ struct type_info_struct
     pkey_t* types;
 };
 typedef struct type_info_struct TypeInfo;
+DeclTableT( TypeInfo, TypeInfo );
 
 struct internal_type_info_struct
 {
@@ -129,6 +129,13 @@ struct internal_type_info_struct
     void (* write_fn) (FILE*, const void*);
 };
 typedef struct internal_type_info_struct InternalTypeInfo;
+DeclTableT( InternalTypeInfo, InternalTypeInfo );
+
+
+static TableT(InternalTypeInfo) Internal_Types;
+static TableT(TypeInfo) Named_Types;
+static TableT(NamedFunction) Named_Functions;
+
 
 static int streqlP (const char* a, const char* b)
 {
@@ -213,8 +220,8 @@ static int internal_type_P (const TypeInfo* info)
 
 static const TypeInfo* type_info (pkey_t type)
 {
-    assert (type < Named_Types.n);
-    return ARef( TypeInfo, Named_Types, type );
+    assert (type < Named_Types.sz);
+    return &Named_Types.s[type];
 }
 
 static const InternalTypeInfo* internal_type_info (const TypeInfo* info)
@@ -222,7 +229,7 @@ static const InternalTypeInfo* internal_type_info (const TypeInfo* info)
     unsigned i;
     assert (internal_type_P (info));
     i = (unsigned) StripWildBit(info->nmembs);
-    return ARef( InternalTypeInfo, Internal_Types, i );
+    return &Internal_Types.s[i];
 }
 
 static
@@ -249,7 +256,7 @@ write_Pair (FILE* out, const Pair* pair)
         type = FunctionInternalType;
     else
         type = StripPKey(pair->key);
-    assert (type < Named_Types.n);
+    assert (type < Named_Types.sz);
     info = type_info (type);
     if (internal_type_P (info))
     {
@@ -316,22 +323,21 @@ write_Runtime (FILE* out, const Runtime* run)
 {
     unsigned i;
     fputs ("Expression stack:\n", out);
-    for (i = 0; i < run->e.n; ++i)
+    for (i = 0; i < run->e.sz; ++i)
     {
-        write_Pair (out, ARef(Pair, run->e, i));
+        write_Pair (out, &run->e.s[i]);
         fputc ('\n', out);
     }
     fputs ("Data stack:\n", out);
-    for (i = 0; i < run->d.n; ++i)
+    for (i = 0; i < run->d.sz; ++i)
     {
-        write_Pair (out, ARef(Pair, run->d, i));
+        write_Pair (out, &run->d.s[i]);
         fputc ('\n', out);
     }
 
-    if (0 != run->e.n)
+    if (0 != run->e.sz)
     {
-        const Pair* expr;
-        expr = ARefLast( Pair, run->e );
+        const Pair* const expr = TopTable( run->e );
         if (funcallP (expr))
         {
             fputs ("Current function:\n", out);
@@ -348,7 +354,7 @@ cleanup_Pair (Pair* pair)
     const TypeInfo* info;
     pkey_t typei;
     typei = StripPKey(pair->key);
-    assert (typei < Named_Types.n);
+    assert (typei < Named_Types.sz);
     info = type_info (typei);
     if (internal_type_P (info))
     {
@@ -375,6 +381,15 @@ cleanup_Pair (Pair* pair)
 
 static
     void
+clear_TableT_Pair (TableT(Pair)* t)
+{
+    uint i;
+    UFor( i, t->sz )  cleanup_Pair (&t->s[i]);
+    t->sz = 0;
+}
+
+static
+    void
 set_pair (Pair* dst, const Pair* src)
 {
     dst->key = src->key;
@@ -388,7 +403,7 @@ copy_Pair (Pair* dst, const Pair* src)
     pkey_t typei;
     const TypeInfo* info;
     typei = StripPKey(src->key);
-    assert (typei < Named_Types.n);
+    assert (typei < Named_Types.sz);
     info = type_info (typei);
     if (internal_type_P (info))
     {
@@ -492,9 +507,9 @@ static
     void
 eval1 (Runtime* run)
 {
-    Pair* expr;
-
-    expr = PopStack( Pair, run->e );
+    DecloStack( Pair, expr );
+    *expr = *TopTable( run->e );
+    MPopTable( run->e, 1 );
 
     if (funcallP (expr))
     {
@@ -508,16 +523,16 @@ eval1 (Runtime* run)
             /* How many args do you have, really? */
         assert (nargs == StripPKey( expr->key ));
 
-        assert (run->d.n >= nargs && "Not enough arguments.");
+        assert (run->d.sz >= nargs && "Not enough arguments.");
 
-        run->d.n -= nargs;
-        dsk = ARef( Pair, run->d, run->d.n );
+        run->d.sz -= nargs;
+        dsk = Elt( run->d.s, run->d.sz );
 
         f = find_function (nargs, dsk, (Function*) expr->val);
         if (!f)
         {
-            GrowArray( Pair, run->d, nargs );
-            GrowArray( Pair, run->e, 1 );
+            GrowTable( run->d, nargs );
+            GrowTable( run->e, 1 );
             write_Runtime (stderr, run);
             assert (f && "Bad function call - check types and nargs.");
         }
@@ -533,10 +548,10 @@ eval1 (Runtime* run)
             nsubst = f->info.std.nsubst;
             argmap = f->info.std.argmap;
 
-            i = run->e.n;
-            GrowArray( Pair, run->e, nexprs ); 
-            dsk = ARef( Pair, run->d, run->d.n );
-            esk = ARef( Pair, run->e, i );
+            i = run->e.sz;
+            GrowTable( run->e, nexprs ); 
+            dsk = &run->d.s[run->d.sz];
+            esk = &run->e.s[i];
 
                 /* Build up the expression stack. */
             memcpy (esk, f->info.std.exprs, nexprs * sizeof (Pair));
@@ -575,16 +590,14 @@ eval1 (Runtime* run)
         }
         else if (InternalFunc == f->type)
         {
-            GrowArray( Pair, run->d, 1 );
-            dsk = ARefLast( Pair, run->d );
+            dsk = Grow1Table( run->d );
                 /* This is a built-in function. */
             (f->info.internal.f) (dsk, f->info.internal.extra);
         }
         else if (ConstructFunc == f->type)
         {
             Pair* val = 0;
-            GrowArray( Pair, run->d, 1 );
-            dsk = ARefLast( Pair, run->d );
+            dsk = Grow1Table( run->d );
 
             if (f->nargs)
             {
@@ -614,8 +627,7 @@ eval1 (Runtime* run)
             Pair* membs;
             Pair tmp;
             assert (1 == f->nargs);
-            GrowArray( Pair, run->d, 1 );
-            dsk = ARefLast( Pair, run->d );
+            dsk = Grow1Table( run->d );
             set_pair (&tmp, dsk);
 
             nmembs = num_type_members (StripPKey(tmp.key));
@@ -643,7 +655,7 @@ eval1 (Runtime* run)
     }
     else
     {
-        PushStack (Pair, run->d, expr);
+        PushTable( run->d, *expr);
     }
 }
 
@@ -652,8 +664,7 @@ static void eval1func (Runtime* run)
     int loopP = 1;
     while (loopP)
     {
-        Pair* expr;
-        expr = ARefLast( Pair, run->e );
+        Pair* expr = TopTable( run->e );
         if (funcallP (expr))
             loopP = 0;
         eval1 (run);
@@ -662,17 +673,16 @@ static void eval1func (Runtime* run)
 
 static void eval (Runtime* run)
 {
-    while (run->e.n)  eval1 (run);
-    assert (1 == run->d.n);
+    while (run->e.sz > 0)  eval1 (run);
+    assert (1 == run->d.sz);
 }
 
 static Function* find_named_function (const char* name)
 {
     unsigned i;
-    for (i = 0; i < Named_Functions.n; ++i)
+    for (i = 0; i < Named_Functions.sz; ++i)
     {
-        NamedFunction* f;
-        f = ARef(NamedFunction, Named_Functions, i);
+        NamedFunction* f = &Named_Functions.s[i];
         if (streqlP (f->name, name))
         {
             return f->f;
@@ -756,10 +766,9 @@ static void reverse_types (unsigned ntypes, pkey_t* types)
 
 static Function* force_init_named_function (const char* name)
 {
-    NamedFunction* namedfn;
     Function* f;
-    GrowArray( NamedFunction, Named_Functions, 1 );
-    namedfn = ARefLast( NamedFunction, Named_Functions );
+    DeclGrow1Table( NamedFunction, namedfn, Named_Functions );
+
     namedfn->name = MemDup(char, name, 1+strlen(name));
     namedfn->f = AllocT( Function, 1 );
     f = namedfn->f;
@@ -817,11 +826,9 @@ static Function* add_named_function (const char* name, const Function* f)
 
 static pkey_t force_init_type (const char* name)
 {
-    TypeInfo* info;
-    pkey_t typei;
-    typei = Named_Types.n;
-    GrowArray( TypeInfo, Named_Types, 1 );
-    info = ARefLast( TypeInfo, Named_Types );
+    DeclGrow1Table( TypeInfo, info, Named_Types );
+    pkey_t typei = Named_Types.sz - 1;
+
     if (name)  info->name = MemDup( char, name, 1+strlen(name) );
     else       info->name = 0;
     info->nmembs = 0;
@@ -834,10 +841,10 @@ static pkey_t ensure_named_type (const char* name)
 {
     unsigned i;
     assert (name);
-    for (i = 0; i < Named_Types.n; ++i)
+    for (i = 0; i < Named_Types.sz; ++i)
     {
         const char* str;
-        str = ARef(TypeInfo, Named_Types, i)->name;
+        str = Named_Types.s[i].name;
         if (str && streqlP (str, name))
             return i;
     }
@@ -852,7 +859,7 @@ static pkey_t add_simple_type (const TypeInfo* src, const char* const* membs)
     TypeInfo* dst;
 
     type = ensure_named_type (src->name);
-    dst = ARef( TypeInfo, Named_Types, type );
+    dst = &Named_Types.s[type];
 
     f.nargs = src->nmembs;
     f.types = src->types;
@@ -883,7 +890,7 @@ static pkey_t add_compound_type (const TypeInfo* src)
     TypeInfo* dst;
 
     type = ensure_named_type (src->name);
-    dst = ARef( TypeInfo, Named_Types, type );
+    dst = &Named_Types.s[type];
 
     dst->nmembs = src->nmembs;
     set_simple_type_P (dst, 0);
@@ -901,11 +908,11 @@ add_internal_type (const char* name, const InternalTypeInfo* iinfo)
     TypeInfo* info;
     if (name)  typei = ensure_named_type (name);
     else       typei = force_init_type (0);
-    info = ARef( TypeInfo, Named_Types, typei );
-    info->nmembs = Internal_Types.n;
+    info = &Named_Types.s[typei];
+    info->nmembs = Internal_Types.sz;
     set_simple_type_P (info, 0);
     info->types = 0;
-    PushStack( InternalTypeInfo, Internal_Types, iinfo );
+    PushTable( Internal_Types, *iinfo );
     assert (internal_type_P (info));
     return typei;
 }
@@ -913,10 +920,10 @@ add_internal_type (const char* name, const InternalTypeInfo* iinfo)
 static pkey_t find_named_type (const char* name)
 {
     unsigned i;
-    for (i = 0; i < Named_Types.n; ++i)
+    for (i = 0; i < Named_Types.sz; ++i)
     {
         const char* str;
-        str = ARef(TypeInfo, Named_Types, i)->name;
+        str = Named_Types.s[i].name;
         if (str && streqlP (str, name))
             return i;
     }
@@ -931,7 +938,7 @@ static void push_function (Runtime* run, const char* name, pkey_t nargs)
     set_funcall_P (&expr, 1);
     expr.val = find_named_function (name);
     assert (expr.val && "Function not found.");
-    PushStack( Pair, run->e, &expr );
+    PushTable( run->e, expr );
 }
 
 static unsigned parse_list (Array* arr, char* str)
@@ -1305,21 +1312,19 @@ static unsigned eval_macro (Runtime* run, const Array* parsed, unsigned i)
 {
     Pair* expr;
     unsigned nargs;
-    assert (run->e.n && "Nothing in expression stack.");
-    expr = ARefLast( Pair, run->e );
+    assert (run->e.sz && "Nothing in expression stack.");
+    expr = TopTable( run->e );
     assert (funcallP (expr) && "No function call atop expression stack.");
     nargs = StripPKey(expr->key);
     while (nargs)
     {
-        Pair* expr;
-        GrowArray( Pair, run->e, 1 );
-        expr = ARefLast( Pair, run->e );
+        DeclGrow1Table( Pair, expr, run->e );
         i = parsed_to_sexpr (expr, parsed, i);
         -- nargs;
     }
     eval1func (run);
-    expr = PopStack( Pair, run->d );
-    PushStack( Pair, run->e, expr );
+    PushTable( run->e, *TopTable( run->d ) );
+    MPopTable( run->d, 1 );
     return i;
 }
 
@@ -1332,8 +1337,8 @@ static void parse_to_runtime (Runtime* run, const char* str)
     buf = AllocT( char, 1+ strlen (str) );
     strcpy (buf, str);
 
-    InitArray( Pair, run->d, N );
-    InitArray( Pair, run->e, N );
+    InitTable( run->d );
+    InitTable( run->e );
     InitArray( Pair, parsed, N );
 
     i = parse_list (&parsed, buf);
@@ -1366,7 +1371,7 @@ static void parse_to_runtime (Runtime* run, const char* str)
             pair.key = FunctionInternalType;
             pair.val = find_named_function ((char*) node->val);
             assert (pair.val && "Function not found.");
-            PushStack( Pair, run->e, &pair );
+            PushTable( run->e, pair );
         }
     }
     free (parsed.a);
@@ -1375,20 +1380,22 @@ static void parse_to_runtime (Runtime* run, const char* str)
 
 static void cleanup_runtime (Runtime* run)
 {
-    CleanupArray( Pair, run->d );
-    CleanupArray( Pair, run->e );
+    clear_TableT_Pair (&run->d);
+    clear_TableT_Pair (&run->e);
+    LoseTable( run->d );
+    LoseTable( run->e );
+    InitTable( run->d );
+    InitTable( run->e );
 }
 
 static void interp_eval (FILE* out, const char* str)
 {
-    Runtime stacked_run;
-    Runtime* run;
-    run = &stacked_run;
+    DecloStack( Runtime, run );
 
     parse_to_runtime (run, str);
 
     eval (run);
-    write_Pair (out, ARef(Pair, run->d, 0));
+    write_Pair (out, &run->d.s[0]);
     fputs ("\n", out);
 
     cleanup_runtime (run);
@@ -1397,12 +1404,8 @@ static void interp_eval (FILE* out, const char* str)
 static void assert_eql (const char* lhs, const char* rhs)
 {
     Pair expr;
-    Runtime stacked_lhsrun;
-    Runtime stacked_rhsrun;
-    Runtime* lhsrun;
-    Runtime* rhsrun;
-    lhsrun = &stacked_lhsrun;
-    rhsrun = &stacked_rhsrun;
+    DecloStack( Runtime, lhsrun );
+    DecloStack( Runtime, rhsrun );
 
     parse_to_runtime (lhsrun, lhs);
     parse_to_runtime (rhsrun, rhs);
@@ -1410,21 +1413,21 @@ static void assert_eql (const char* lhs, const char* rhs)
     eval (lhsrun);
     eval (rhsrun);
 
-    if (lhsrun->e.n < 3)
-        GrowArray(Pair, lhsrun->e, 3 - lhsrun->e.n);
+    if (lhsrun->e.sz < 3)
+        GrowTable( lhsrun->e, 3 - lhsrun->e.sz);
 
     expr.key = 2;
     set_funcall_P (&expr, 1);
     expr.val = find_named_function ("eql");
     assert (expr.val && "Function not found.");
-    copy_Pair (ARef( Pair, lhsrun->e, 0 ), &expr);
-    copy_Pair (ARef( Pair, lhsrun->e, 1 ), ARef( Pair, rhsrun->d, 0 ));
-    copy_Pair (ARef( Pair, lhsrun->e, 2 ), ARef( Pair, lhsrun->d, 0 ));
-    ClearArray( Pair, rhsrun->d );
-    ClearArray( Pair, lhsrun->d );
+    copy_Pair (&lhsrun->e.s[0], &expr);
+    copy_Pair (&lhsrun->e.s[1], &rhsrun->d.s[0]);
+    copy_Pair (&lhsrun->e.s[2], &lhsrun->d.s[0]);
+    clear_TableT_Pair (&rhsrun->d);
+    clear_TableT_Pair (&lhsrun->d);
     eval (lhsrun);
 
-    copy_Pair (&expr, ARef( Pair, lhsrun->d, 0 ));
+    copy_Pair (&expr, &lhsrun->d.s[0]);
     assert (StripPKey(expr.key) == find_named_type ("yes")
             && "Evaluated expressions are not equal! lhs != rhs.");
 
@@ -1499,15 +1502,15 @@ static void init_lisp ()
 {
     const unsigned N = 1;
     pkey_t typei;
-    InitArray( TypeInfo, Named_Types, N );
-    InitArray( InternalTypeInfo, Internal_Types, N );
-    InitArray( NamedFunction, Named_Functions, N );
+    InitTable( Named_Types );
+    InitTable( Internal_Types );
+    InitTable( Named_Functions );
 
     {
             /* Add the /any/ type, it's hardcoded. */
         TypeInfo* info;
         typei = ensure_named_type ("any");
-        info = ARef( TypeInfo, Named_Types, typei );
+        info = &Named_Types.s[typei];
         info->nmembs = 0;
         set_simple_type_P (info, 0);
         assert (AnyType == typei);
@@ -1557,9 +1560,16 @@ static void init_lisp ()
 
 static void cleanup_lisp ()
 {
-    CleanupArray( NamedFunction, Named_Functions );
-    CleanupArray( TypeInfo, Named_Types );
-    free (Internal_Types.a);
+    uint i;
+    UFor( i, Named_Functions.sz )
+        cleanup_NamedFunction (&Named_Functions.s[i]);
+    LoseTable( Named_Functions );
+
+    UFor( i, Named_Types.sz )
+        cleanup_TypeInfo (&Named_Types.s[i]);
+    LoseTable( Named_Types );
+
+    LoseTable (Internal_Types);
 }
 
 int main ()
@@ -1715,6 +1725,8 @@ int main ()
 
     interp_eval (out, "(list (yes))");
     cleanup_lisp ();
+
+    (void) set_vararg_func_P;
     return 0;
 }
 
