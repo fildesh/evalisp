@@ -5,10 +5,12 @@ CFLAGS += -Wall -Wextra -Wstrict-aliasing
 CFLAGS += -g
 #CFLAGS += -O3
 
-IFLAGS = -I$(cx_path)/..
-
 cx_path = ../cx
 bin_path = ../bin
+
+IFLAGS = -I$(cx_path)/..
+
+CFLAGS += $(IFLAGS)
 
 exe_list = eva
 exe_list := $(addprefix $(bin_path)/,$(exe_list))
@@ -28,7 +30,7 @@ $(cx_path):
 	$(MAKE) -C $(cx_path)
 
 %.o: %.c
-	$(CC) -c $(CFLAGS) $(IFLAGS) $^ -o $@
+	$(CC) -c $(CFLAGS) $^ -o $@
 
 $(exe_list): | $(bin_path)
 

@@ -17,7 +17,6 @@ enum Cons_Kind {
 };
 typedef enum Cons_Kind Cons_Kind;
 
-
 struct Cons
 {
     Cons* cdr;
@@ -29,6 +28,7 @@ struct Cons
     } car;
 };
 
+DeclTableT( Cons, Cons );
 
     Cons*
 make1_Cons (Cons* b)
@@ -73,7 +73,6 @@ free_Cons (Cons* a)
 }
 
 
-DeclTableT( Cons, Cons );
     void
 dump_Cons_FileB (FileB* f, Cons* a)
 {
@@ -151,7 +150,17 @@ parse_lisp_FileB (FileB* f)
     }
 
     if (up.sz > 1)
-        DBog1( "%u paren pairs need closing!", up.sz );
+    {
+        { BLoop( i, up.sz-1 )
+            Cons* y = &up.s[i+1];
+            if (y->cdr)
+            {
+                free_Cons (y->cdr);
+                y->cdr = 0;
+            }
+        } BLose()
+        DBog1( "%u paren pairs need closing!", up.sz-1 );
+    }
 
     x = up.s[0].cdr;
     LoseTable( up );
