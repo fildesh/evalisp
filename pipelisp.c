@@ -1,23 +1,24 @@
 
+#include "cx/table.h"
+
 #include <assert.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "array.c"
+#include "array.h"
 static Array Internal_Types;
 static Array Named_Types;
 static Array Named_Functions;
 
 typedef size_t pkey_t;
 
-#define NBitsInByte 8
-#define HIGHBIT ((pkey_t)1 << (NBitsInByte * sizeof (pkey_t) -1))
+#define HIGHBIT ((pkey_t)1 << (NBits_byte * sizeof (pkey_t) -1))
 static const pkey_t MUTABIT = HIGHBIT >> 1;
 static const pkey_t CALLBIT = HIGHBIT;
 #undef HIGHBIT
-#define HIGHBIT ((pkey_t)1 << (NBitsInByte * sizeof (unsigned) -1))
+#define HIGHBIT ((pkey_t)1 << (NBits_byte * sizeof (unsigned) -1))
 static const unsigned WILDBIT = HIGHBIT;
 #undef HIGHBIT
 
@@ -1051,21 +1052,14 @@ static pkey_t interp_deftype (const char* str)
             {
                 unsigned nelems;
                 nelems = StripPKey(node->key);
-                assert (1 == nelems || 2 == nelems);
+                assert (2 == nelems && "Missing type for type param!");
 
                 node = ARef( Pair, parsed, ++i );
                 assert (!funcallP (node));
                 membstr = (char*) node->val;
 
-                if (2 == nelems)
-                {
-                    node = ARef( Pair, parsed, ++i );
-                    typestr = (char*) node->val;
-                }
-                else
-                {
-                    typestr = "nil";
-                }
+                node = ARef( Pair, parsed, ++i );
+                typestr = (char*) node->val;
             }
             else
             {
@@ -1181,21 +1175,14 @@ static void interp_def (const char* str)
         {
             unsigned nelems;
             nelems = StripPKey(node->key);
-            assert (1 == nelems || 2 == nelems);
+            assert (2 == nelems && "Missing type for func param!");
 
             node = ARef( Pair, parsed, ++i );
             assert (!funcallP (node) && "(def ((name) arg1 arg2)) ?!");
             formalstr = (char*) node->val;
 
-            if (2 == nelems)
-            {
-                node = ARef( Pair, parsed, ++i );
-                typestr = (char*) node->val;
-            }
-            else
-            {
-                typestr = "nil";
-            }
+            node = ARef( Pair, parsed, ++i );
+            typestr = (char*) node->val;
         }
         else
         {
@@ -1252,6 +1239,7 @@ static void interp_def (const char* str)
     if (0 == exprs.n)
     {
         Pair expr;
+        fputs ("!! No return value, assuming (nil).\n", stderr);
         expr.key = 0;
         set_funcall_P (&expr, 1);
         expr.val = find_named_function ("nil");
@@ -1583,50 +1571,50 @@ int main ()
     interp_deftype ("(deftype bool yes nil)");
 
     interp_def ("(def (or (a yes) (b yes)) (yes))");
-    interp_def ("(def (or (a yes) (b    )) (yes))");
-    interp_def ("(def (or (a    ) (b yes)) (yes))");
-    interp_def ("(def (or (a    ) (b    ))      )");
+    interp_def ("(def (or (a yes) (b nil)) (yes))");
+    interp_def ("(def (or (a nil) (b yes)) (yes))");
+    interp_def ("(def (or (a nil) (b nil)) (nil))");
 
     interp_def ("(def (and (a yes) (b yes)) (yes))");
-    interp_def ("(def (and (a yes) (b    ))      )");
-    interp_def ("(def (and (a    ) (b yes))      )");
-    interp_def ("(def (and (a    ) (b    ))      )");
+    interp_def ("(def (and (a yes) (b nil)) (nil))");
+    interp_def ("(def (and (a nil) (b yes)) (nil))");
+    interp_def ("(def (and (a nil) (b nil)) (nil))");
 
     interp_def ("(def (impl (a yes) (b yes)) (yes))");
-    interp_def ("(def (impl (a yes) (b    ))      )");
-    interp_def ("(def (impl (a    ) (b yes)) (yes))");
-    interp_def ("(def (impl (a    ) (b    )) (yes))");
+    interp_def ("(def (impl (a yes) (b nil)) (nil))");
+    interp_def ("(def (impl (a nil) (b yes)) (yes))");
+    interp_def ("(def (impl (a nil) (b nil)) (yes))");
 
     interp_def ("(def (eql (a yes) (b yes)) (yes))");
-    interp_def ("(def (eql (a yes) (b    ))      )");
-    interp_def ("(def (eql (a    ) (b yes))      )");
-    interp_def ("(def (eql (a    ) (b    )) (yes))");
+    interp_def ("(def (eql (a yes) (b nil)) (nil))");
+    interp_def ("(def (eql (a nil) (b yes)) (nil))");
+    interp_def ("(def (eql (a nil) (b nil)) (yes))");
 
-    interp_def ("(def (not (a    )) (yes))");
-    interp_def ("(def (not (a yes))      )");
+    interp_def ("(def (not (a nil)) (yes))");
+    interp_def ("(def (not (a yes)) (nil))");
 
-    interp_def ("(def (if (a    ) b c) c)");
+    interp_def ("(def (if (a nil) b c) c)");
     interp_def ("(def (if (a yes) b c) b)");
 
-    interp_def ("(def (eql (a cons) (b     )))");
-    interp_def ("(def (eql (a     ) (b cons)))");
+    interp_def ("(def (eql (a cons) (b nil )) (nil))");
+    interp_def ("(def (eql (a nil ) (b cons)) (nil))");
     interp_def ("(def (eql (a cons) (b cons))"
                 "  (and (eql (car a) (car b))"
                 "       (eql (cdr a) (cdr b))))");
 
-    interp_def ("(def (cat (a     ) (b list)) b)");
+    interp_def ("(def (cat (a nil ) (b list)) b)");
     interp_def ("(def (cat (a cons) (b list))"
                 "  (cons (car a)"
                 "        (cat (cdr a) b)))");
 
     interp_def ("(def (list a) (cons a (nil)))");
 
-    interp_def ("(def (rev (L)))");
+    interp_def ("(def (rev (L nil)) (nil))");
     interp_def ("(def (rev (L cons))"
                 "  (cat (rev (cdr L))"
                 "       (list (car L))))");
 
-    interp_def ("(def (map (f func) (L)))");
+    interp_def ("(def (map (f func) (L nil)) (nil))");
     interp_def ("(def (map (f func) (L cons))"
                 "  (cons (f (car L))"
                 "         (map f (cdr L))))");
@@ -1634,13 +1622,13 @@ int main ()
     interp_def ("(def (consif (pred func) e L)"
                 "  (if (pred e) (cons e L) L))");
 
-    interp_def ("(def (filter (f func) (L)))");
+    interp_def ("(def (filter (f func) (L nil)) (nil))");
     interp_def ("(def (filter (f func) (L cons))"
                 "  (consif f (car L) (filter f (cdr L))))");
 
     interp_deftype ("(deftype (set (elements list)))");
 
-    interp_def ("(def (in e (L)))");
+    interp_def ("(def (in e (L nil)) (nil))");
     interp_def ("(def (in e (L cons))"
                 "  (or (eql e (car L))"
                 "      (in e (cdr L))))");
@@ -1690,7 +1678,7 @@ int main ()
     interp_def ("(def (- (a zero)) a)");
 
     interp_def ("(def (zero (a zero)) (yes))");
-    interp_def ("(def (zero (a nonzero-int)))");
+    interp_def ("(def (zero (a nonzero-int)) (nil))");
 
     interp_def ("(def (- (a int) (b int))"
                 "  (+ a (- b)))");

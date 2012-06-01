@@ -12,7 +12,7 @@ IFLAGS = -I$(cx_path)/..
 
 CFLAGS += $(IFLAGS)
 
-exe_list = eva
+exe_list = eva pipelisp
 exe_list := $(addprefix $(bin_path)/,$(exe_list))
 
 all: $(exe_list)
@@ -21,6 +21,9 @@ cx_obj_list = fileb.o sys-cx.o
 cx_obj_list := $(addprefix $(cx_path)/,$(cx_obj_list))
 
 $(bin_path)/eva: eva.o $(cx_obj_list)
+	$(CC) $(CFLAGS) -o $@ $^
+
+$(bin_path)/pipelisp: pipelisp.o
 	$(CC) $(CFLAGS) -o $@ $^
 
 $(exe_list): | $(cx_path)
