@@ -1,11 +1,9 @@
 
 #include "cx/fileb.h"
+#include "cx/sys-cx.h"
 
 #include <assert.h>
 #include <ctype.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 typedef struct Pair Pair;
 typedef struct Function Function;
@@ -132,7 +130,7 @@ struct InternalTypeInfo
 {
     void* (* copy_fn) (const void*);
     void  (* free_fn) (void*);
-    void (* write_fn) (FILE*, const void*);
+    void (* write_fn) (FileB*, const void*);
 };
 
 
@@ -260,14 +258,14 @@ num_type_members (pkey_t type)
 
 static
     void
-write_CString (FILE* out, const char* str)
+write_CString (FileB* out, const char* str)
 {
-    fputs (str, out);
+    dump_cstr_FileB (out, str);
 }
 
 static
     void
-write_Pair (FILE* out, const Pair* pair)
+write_Pair (FileB* out, const Pair* pair)
 {
     pkey_t type;
     const TypeInfo* info;
@@ -287,22 +285,22 @@ write_Pair (FILE* out, const Pair* pair)
     else
     {
         unsigned i;
-        fputc ('(', out);
-        fputs (info->name, out);
+        dump_char_FileB (out, '(');
+        dump_cstr_FileB (out, info->name);
         pair = (Pair*) pair->val;
 
         for (i = 0; i < info->nmembs; ++i)
         {
-            fputc (' ', out);
+            dump_char_FileB (out, ' ');
             write_Pair (out, &pair[info->nmembs - i - 1]);
         }
-        fputc (')', out);
+        dump_char_FileB (out, ')');
     }
 }
 
 static
     void
-write_Function (FILE* out, const Function* f)
+write_Function (FileB* out, const Function* f)
 {
     unsigned i, nargs;
     if (SetOfFunc == f->type)
@@ -310,48 +308,50 @@ write_Function (FILE* out, const Function* f)
         const FunctionSet* fs;
         const char* name;
         name = "funcs";
-        fprintf (out, "(%s", name);
+        printf_FileB (out, "(%s", name);
         fs = &f->info.set.funcs;
         for (i = 0; i < fs->sz; ++i)
         {
-            fputc (' ', out);
+            dump_char_FileB (out, ' ');
             write_Function (out, &fs->s[i]);
         }
-        fputc (')', out);
+        dump_char_FileB (out, ')');
         return;
     }
 
-    if (macro_func_P (f))  fputs ("(macro", out);
-    else                   fputs ("(func", out);
+    if (macro_func_P (f))  dump_cstr_FileB (out, "(macro");
+    else                   dump_cstr_FileB (out, "(func)");
 
     nargs = StripWildBit(f->nargs);
     for (i = 0; i < nargs; ++i)
     {
+        const TypeInfo* info;
         pkey_t t;
-        fputc (' ', out);
+        dump_char_FileB (out, ' ');
         if (macro_func_P (f))  t = AnyType;
         else                   t = f->types[f->nargs -i -1];
-        fputs (type_info (t) -> name, out);
+        info = type_info (t);
+        dump_cstr_FileB (out, info->name);
     }
-    fputc (')', out);
+    dump_char_FileB (out, ')');
 }
 
 static
     void
-write_Runtime (FILE* out, const Runtime* run)
+write_Runtime (FileB* out, const Runtime* run)
 {
     unsigned i;
-    fputs ("Expression stack:\n", out);
+    dump_cstr_FileB (out, "Expression stack:\n");
     for (i = 0; i < run->e.sz; ++i)
     {
         write_Pair (out, &run->e.s[i]);
-        fputc ('\n', out);
+        dump_char_FileB (out, '\n');
     }
-    fputs ("Data stack:\n", out);
+    dump_cstr_FileB (out, "Data stack:\n");
     for (i = 0; i < run->d.sz; ++i)
     {
         write_Pair (out, &run->d.s[i]);
-        fputc ('\n', out);
+        dump_char_FileB (out, '\n');
     }
 
     if (0 != run->e.sz)
@@ -359,9 +359,9 @@ write_Runtime (FILE* out, const Runtime* run)
         const Pair* const expr = TopTable( run->e );
         if (funcallP (expr))
         {
-            fputs ("Current function:\n", out);
+            dump_cstr_FileB (out, "Current function:\n");
             write_Pair (out, expr);
-            fprintf (out, "\nnargs: %u\n", (unsigned) StripPKey(expr->key));
+            printf_FileB (out, "\nnargs: %u\n", (uint) StripPKey(expr->key));
         }
     }
 }
@@ -552,7 +552,7 @@ eval1 (Runtime* run)
         {
             GrowTable( run->d, nargs );
             GrowTable( run->e, 1 );
-            write_Runtime (stderr, run);
+            write_Runtime (stderr_FileB (), run);
             assert (f && "Bad function call - check types and nargs.");
         }
         dsk = 0;
@@ -1257,7 +1257,7 @@ static void interp_def (const char* str)
     if (0 == exprs.sz)
     {
         Pair expr;
-        fputs ("!! No return value, assuming (nil).\n", stderr);
+        DBog0( "No return value, assuming (nil)." );
         expr.key = 0;
         set_funcall_P (&expr, 1);
         expr.val = find_named_function ("nil");
@@ -1401,7 +1401,8 @@ static void cleanup_runtime (Runtime* run)
     InitTable( run->e );
 }
 
-static void interp_eval (FILE* out, const char* str)
+static void
+interp_eval (FileB* out, const char* str)
 {
     DecloStack( Runtime, run );
 
@@ -1409,7 +1410,7 @@ static void interp_eval (FILE* out, const char* str)
 
     eval (run);
     write_Pair (out, &run->d.s[0]);
-    fputs ("\n", out);
+    dump_cstr_FileB (out, "\n");
 
     cleanup_runtime (run);
 }
@@ -1449,7 +1450,8 @@ static void assert_eql (const char* lhs, const char* rhs)
 }
 
 
-static void test_cases (FILE* out)
+static void
+test_cases (FileB* out)
 {
     (void) out;
     assert_eql ("(yes)",
@@ -1491,11 +1493,11 @@ static void int_macro_fn (Pair* data, void* int_types)
     data->val = ToPtr(res);
 }
 
-static void write_int_fn (FILE* out, const void* val)
+static void write_int_fn (FileB* out, const void* val)
 {
     int i;
     i = PtrTo(int, val);
-    fprintf (out, "('int %d)", i);
+    printf_FileB (out, "('int %d)", i);
 }
 
 static void int_add_fn (Pair* data, void* zero_typei)
@@ -1534,7 +1536,7 @@ static void init_lisp ()
         internal.copy_fn = 0;
         internal.free_fn = 0;
         internal.write_fn =
-            (void (*) (FILE*, const void*)) &write_Function;
+            (void (*) (FileB*, const void*)) &write_Function;
         typei = add_internal_type ("func", &internal);
         assert (FunctionInternalType == typei);
 
@@ -1543,7 +1545,7 @@ static void init_lisp ()
         assert (VarArgInternalType == typei);
 
         internal.write_fn =
-            (void (*) (FILE*, const void*)) &write_CString;
+            (void (*) (FileB*, const void*)) &write_CString;
         typei = add_internal_type (0, &internal);
         assert (CStringInternalType == typei);
     }
@@ -1586,9 +1588,11 @@ static void cleanup_lisp ()
 
 int main ()
 {
-    FILE* out;
-    out = stdout;
+    FileB* out;
+    init_sys_cx ();
+    out = stdout_FileB ();
     init_lisp ();
+    push_losefn_sys_cx (cleanup_lisp);
 
     interp_deftype ("(deftype bool yes nil)");
 
@@ -1736,7 +1740,8 @@ int main ()
 #endif
 
     interp_eval (out, "(list (yes))");
-    cleanup_lisp ();
+
+    lose_sys_cx ();
 
     (void) set_vararg_func_P;
     return 0;

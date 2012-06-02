@@ -23,7 +23,7 @@ cx_obj_list := $(addprefix $(cx_path)/,$(cx_obj_list))
 $(bin_path)/eva: eva.o $(cx_obj_list)
 	$(CC) $(CFLAGS) -o $@ $^
 
-$(bin_path)/pipelisp: pipelisp.o
+$(bin_path)/pipelisp: pipelisp.o $(cx_obj_list)
 	$(CC) $(CFLAGS) -o $@ $^
 
 $(exe_list): | $(cx_path)
