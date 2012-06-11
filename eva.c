@@ -74,27 +74,27 @@ free_Cons (Cons* a)
 
 
     void
-dump_Cons_FileB (FileB* f, Cons* a)
+dump_Cons (OFileB* of, Cons* a)
 {
-    dump_char_FileB (f, '(');
+    dump_char_OFileB (of, '(');
     while (a)
     {
         switch (a->kind)
         {
             case Cons_Cons:
-                dump_Cons_FileB (f, a->car.cons);
+                dump_Cons (of, a->car.cons);
                 break;
             case Cons_cstr:
-                dump_cstr_FileB (f, a->car.cstr);
+                dump_cstr_OFileB (of, a->car.cstr);
                 break;
             default:
                 break;
         }
         a = a->cdr;
         if (a)
-            dump_char_FileB (f, ' ');
+            dump_char_OFileB (of, ' ');
     }
-    dump_char_FileB (f, ')');
+    dump_char_OFileB (of, ')');
 }
 
 
@@ -172,19 +172,19 @@ parse_lisp_FileB (FileB* f)
 main ()
 {
     FileB* in;
-    FileB* out;
+    OFileB* of;
     Cons* x;
 
     init_sys_cx ();
 
     in = stdin_FileB ();
-    out = stderr_FileB ();
+    of = stderr_OFileB ();
 
     x = parse_lisp_FileB (in);
-    dump_Cons_FileB (out, x);
+    dump_Cons (of, x);
     free_Cons (x);
 
-    dump_char_FileB (out, '\n');
+    dump_char_OFileB (of, '\n');
 
     lose_sys_cx ();
     return 0;
