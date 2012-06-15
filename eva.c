@@ -99,7 +99,7 @@ dump_Cons (OFileB* of, Cons* a)
 
 
     Cons*
-parse_lisp_FileB (FileB* f)
+parse_lisp_XFileB (XFileB* xf)
 {
     char delims[2+sizeof(WhiteSpaceChars)];
     char* s = 0;
@@ -112,9 +112,9 @@ parse_lisp_FileB (FileB* f)
     delims[1] = ')';
     strcpy (&delims[2], WhiteSpaceChars);
 
-    for (s = nextds_FileB (f, &c, delims);
+    for (s = nextds_XFileB (xf, &c, delims);
          s;
-         s = nextds_FileB (f, &c, delims))
+         s = nextds_XFileB (xf, &c, delims))
     {
         Cons* y;
         if (s[0] != '\0')
@@ -171,16 +171,16 @@ parse_lisp_FileB (FileB* f)
     int
 main ()
 {
-    FileB* in;
+    XFileB* xf;
     OFileB* of;
     Cons* x;
 
     init_sys_cx ();
 
-    in = stdin_FileB ();
+    xf = stdin_XFileB ();
     of = stderr_OFileB ();
 
-    x = parse_lisp_FileB (in);
+    x = parse_lisp_XFileB (xf);
     dump_Cons (of, x);
     free_Cons (x);
 
