@@ -1,6 +1,6 @@
 
+#include "cx/syscx.h"
 #include "cx/fileb.h"
-#include "cx/sys-cx.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -23,19 +23,6 @@ DeclTableT( TypeInfo, TypeInfo );
 DeclTableT( InternalTypeInfo, InternalTypeInfo );
 
 DeclTableT( pkey_t, pkey_t );
-#ifndef DeclTableT_uint
-#define DeclTableT_uint
-DeclTableT( uint, uint );
-#endif
-#ifndef DeclTableT_cstr
-#define DeclTableT_cstr
-DeclTableT( cstr, char* );
-#endif
-#ifndef DeclTableT_ccstr
-#define DeclTableT_ccstr
-DeclTableT( ccstr, const char* );
-#endif
-
 
 enum known_types_enum
 {
@@ -1055,7 +1042,7 @@ static pkey_t interp_deftype (const char* str)
     node = &parsed.s[2];
     if (funcallP (node))
     {
-        DeclTable( ccstr, membs );
+        DeclTable( const_cstr, membs );
 
         node = &parsed.s[0];
         assert (2 == StripPKey(node->key));
@@ -1588,13 +1575,18 @@ static void cleanup_lisp ()
     LoseTable (Internal_Types);
 }
 
-int main ()
+int main (int argc, char** argv)
 {
-    OFileB* of;
-    init_sys_cx ();
-    of = stdout_OFileB ();
+    int argi =
+        (init_sysCx (&argc, &argv),
+         1);
+    OFileB* of = stdout_OFileB ();
+
+    if (argi < argc)
+        failout_sysCx ("I don't take arguments from humans.");
+
     init_lisp ();
-    push_losefn_sys_cx (cleanup_lisp);
+    push_losefn_sysCx (cleanup_lisp);
 
     interp_deftype ("(deftype bool yes nil)");
 
@@ -1743,9 +1735,8 @@ int main ()
 
     interp_eval (of, "(list (yes))");
 
-    lose_sys_cx ();
-
     (void) set_vararg_func_P;
+    lose_sysCx ();
     return 0;
 }
 

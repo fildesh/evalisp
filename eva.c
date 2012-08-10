@@ -1,102 +1,9 @@
 
-#include "cx/bstree.h"
+#include "cx/syscx.h"
+#include "cx/cons.h"
 #include "cx/fileb.h"
-#include "cx/rbtree.h"
-#include "cx/sys-cx.h"
 
-#include <assert.h>
 #include <string.h>
-
-typedef struct Cons Cons;
-
-
-enum Cons_Kind {
-    Cons_Cons, /* car is a Cons */
-    Cons_cstr,
-    Cons_NKinds
-};
-typedef enum Cons_Kind Cons_Kind;
-
-struct Cons
-{
-    Cons* cdr;
-    uint nrefs;
-    Cons_Kind kind;
-    union Cons_union {
-        Cons* cons;
-        char* cstr;
-    } car;
-};
-
-DeclTableT( Cons, Cons );
-
-    Cons*
-make1_Cons (Cons* b)
-{
-    DeclAlloc( Cons, a, 1 );
-
-    a->kind = Cons_NKinds;
-    a->nrefs = 1;
-    a->cdr = b;
-    if (b)  ++ b->nrefs;
-
-    return a;
-}
-
-Cons* make_Cons () { return make1_Cons (0); }
-
-    void
-free_Cons (Cons* a)
-{
-    while (a)
-    {
-        -- a->nrefs;
-        if (a->nrefs > 0)  break;
-        switch (a->kind)
-        {
-            case Cons_Cons:
-                free_Cons (a->car.cons);
-                break;
-            case Cons_cstr:
-                free (a->car.cstr);
-                break;
-            default:
-                break;
-        }
-
-        {
-            Cons* const b = a;
-            a = a->cdr;
-            free (b);
-        }
-    }
-}
-
-
-    void
-dump_Cons (OFileB* of, Cons* a)
-{
-    dump_char_OFileB (of, '(');
-    while (a)
-    {
-        switch (a->kind)
-        {
-            case Cons_Cons:
-                dump_Cons (of, a->car.cons);
-                break;
-            case Cons_cstr:
-                dump_cstr_OFileB (of, a->car.cstr);
-                break;
-            default:
-                break;
-        }
-        a = a->cdr;
-        if (a)
-            dump_char_OFileB (of, ' ');
-    }
-    dump_char_OFileB (of, ')');
-}
-
 
     Cons*
 parse_lisp_XFileB (XFileB* xf)
@@ -121,8 +28,8 @@ parse_lisp_XFileB (XFileB* xf)
         {
             x->cdr = make_Cons ();
             x = x->cdr;
-            x->kind = Cons_cstr;
-            x->car.cstr = dup_cstr (s);
+            x->car.kind = Cons_cstr;
+            x->car.as.cstr = dup_cstr (s);
         }
 
         if (c == '(')
@@ -131,7 +38,7 @@ parse_lisp_XFileB (XFileB* xf)
             y = x->cdr;
             x = Grow1Table( up );
             x->cdr = 0;
-            x->car.cons = y;
+            x->car.as.cons = y;
         }
         else if (c == ')')
         {
@@ -142,9 +49,9 @@ parse_lisp_XFileB (XFileB* xf)
             }
 
             y = &up.s[up.sz-1];
-            x = y->car.cons;
-            x->kind = Cons_Cons;
-            x->car.cons = y->cdr;
+            x = y->car.as.cons;
+            x->car.kind = Cons_Cons;
+            x->car.as.cons = y->cdr;
             MPopTable( up, 1 );
         }
     }
@@ -155,7 +62,7 @@ parse_lisp_XFileB (XFileB* xf)
             Cons* y = &up.s[i+1];
             if (y->cdr)
             {
-                free_Cons (y->cdr);
+                lose_Cons (y->cdr);
                 y->cdr = 0;
             }
         } BLose()
@@ -169,24 +76,25 @@ parse_lisp_XFileB (XFileB* xf)
 
 
     int
-main ()
+main (int argc, char** argv)
 {
-    XFileB* xf;
-    OFileB* of;
+    int argi =
+        (init_sysCx (&argc, &argv),
+         1);
+    XFileB* xf = stdin_XFileB ();
+    OFileB* of = stderr_OFileB ();
     Cons* x;
 
-    init_sys_cx ();
-
-    xf = stdin_XFileB ();
-    of = stderr_OFileB ();
+    if (argi < argc)
+        failout_sysCx ("I don't take arguments from humans.");
 
     x = parse_lisp_XFileB (xf);
     dump_Cons (of, x);
-    free_Cons (x);
+    lose_Cons (x);
 
     dump_char_OFileB (of, '\n');
 
-    lose_sys_cx ();
+    lose_sysCx ();
     return 0;
 }
 
