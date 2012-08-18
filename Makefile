@@ -1,41 +1,40 @@
 
-CC = gcc
-CFLAGS =
-CFLAGS += -g
-#CFLAGS += -O3
-CFLAGS += -ansi -pedantic
-CFLAGS += -Wall -Wextra -Wstrict-aliasing
+default: all
 
-cx_path = ../cx
-bin_path = ../bin
+CC = gcc
+
+CONFIG += ansi
+CONFIG += debug
 
 IFLAGS = -I..
 
 CFLAGS += $(IFLAGS)
 
-exe_list = eva pipelisp
-exe_list := $(addprefix $(bin_path)/,$(exe_list))
+CxPath = ../cx
+BinPath = ../bin
+PfxBldPath = ../eva-bld
+BldPath = $(PfxBldPath)/eva
+CxBldPath = $(PfxBldPath)/cx
 
-all: $(exe_list)
+ExeList = eva pipelisp
+Deps := $(ExeList)
+ExeList := $(addprefix $(BinPath)/,$(ExeList))
+Objs = $(addprefix $(BldPath)/,$(addsuffix .o,$(Deps)))
 
-cx_obj_list = fileb.o syscx.o
-cx_obj_list := $(addprefix $(cx_path)/,$(cx_obj_list))
+include $(CxPath)/include.mk
 
-$(bin_path)/eva: eva.o $(cx_obj_list)
+all: $(ExeList)
+
+$(BinPath)/eva: $(BldPath)/eva.o \
+	$(addprefix $(CxBldPath)/,fileb.o sxpn.o syscx.o)
 	$(CC) $(CFLAGS) -o $@ $^
 
-$(bin_path)/pipelisp: pipelisp.o $(cx_obj_list)
+$(BinPath)/pipelisp: $(BldPath)/pipelisp.o \
+	$(addprefix $(CxBldPath)/, fileb.o syscx.o)
 	$(CC) $(CFLAGS) -o $@ $^
-
-%.o: %.c
-	$(CC) -c $(CFLAGS) $^ -o $@
-
-$(exe_list): | $(bin_path)
-
-$(bin_path):
-	mkdir -p $(bin_path)
 
 .PHONY: clean
 clean:
-	rm -f *.o $(cx_path)/*.o $(exe_list)
+	rm -fr $(PfxBldPath)
+	rm -f $(ExeList)
 

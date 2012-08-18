@@ -1,12 +1,12 @@
 
 #include "cx/syscx.h"
-#include "cx/cons.h"
 #include "cx/fileb.h"
+#include "cx/sxpn.h"
 
 #include <string.h>
 
     Cons*
-parse_lisp_XFileB (XFileB* xf)
+load_Sxpn (XFileB* xf, Sxpn* sx)
 {
     char delims[2+sizeof(WhiteSpaceChars)];
     char* s = 0;
@@ -26,7 +26,7 @@ parse_lisp_XFileB (XFileB* xf)
         Cons* y;
         if (s[0] != '\0')
         {
-            x->cdr = make_Cons ();
+            x->cdr = req_Sxpn (sx);
             x = x->cdr;
             x->car.kind = Cons_cstr;
             x->car.as.cstr = dup_cstr (s);
@@ -34,7 +34,7 @@ parse_lisp_XFileB (XFileB* xf)
 
         if (c == '(')
         {
-            x->cdr = make_Cons ();
+            x->cdr = req_Sxpn (sx);
             y = x->cdr;
             x = Grow1Table( up );
             x->cdr = 0;
@@ -62,7 +62,7 @@ parse_lisp_XFileB (XFileB* xf)
             Cons* y = &up.s[i+1];
             if (y->cdr)
             {
-                lose_Cons (y->cdr);
+                giv_Sxpn (sx, y->cdr);
                 y->cdr = 0;
             }
         } BLose()
@@ -81,6 +81,7 @@ main (int argc, char** argv)
     int argi =
         (init_sysCx (&argc, &argv),
          1);
+    DecloStack1( Sxpn, sx, dflt_Sxpn () );
     XFileB* xf = stdin_XFileB ();
     OFileB* of = stderr_OFileB ();
     Cons* x;
@@ -88,12 +89,13 @@ main (int argc, char** argv)
     if (argi < argc)
         failout_sysCx ("I don't take arguments from humans.");
 
-    x = parse_lisp_XFileB (xf);
+    x = load_Sxpn (xf, sx);
     dump_Cons (of, x);
-    lose_Cons (x);
+    giv_Sxpn (sx, x);
 
     dump_char_OFileB (of, '\n');
 
+    lose_Sxpn (sx);
     lose_sysCx ();
     return 0;
 }
