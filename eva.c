@@ -11,9 +11,8 @@ load_Sxpn (XFileB* xf, Sxpn* sx)
     char delims[2+sizeof(WhiteSpaceChars)];
     char* s = 0;
     char c = 0;
-    DeclTable( Cons, up );
-    Cons* x = Grow1Table( up );
-    x->cdr = 0;
+    Cons* up = req2_Sxpn (sx, dflt_Cons_ConsAtom (0), 0);
+    Cons** p = &up->car.as.cons;
 
     delims[0] = '(';
     delims[1] = ')';
@@ -23,55 +22,56 @@ load_Sxpn (XFileB* xf, Sxpn* sx)
          s;
          s = nextds_XFileB (xf, &c, delims))
     {
-        Cons* y;
         if (s[0] != '\0')
         {
-            x->cdr = req_Sxpn (sx);
-            x = x->cdr;
-            x->car.kind = Cons_cstr;
-            x->car.as.cstr = dup_cstr (s);
+            Cons* x = req_Sxpn (sx);
+            *p = x;
+            p = &x->cdr;
+            x->car.kind = Cons_AlphaTab;
+            x->car.as.alphatab = cons1_AlphaTab (s);
         }
 
         if (c == '(')
         {
-            x->cdr = req_Sxpn (sx);
-            y = x->cdr;
-            x = Grow1Table( up );
-            x->cdr = 0;
-            x->car.as.cons = y;
+            Cons* x = req2_Sxpn (sx, dflt_Cons_ConsAtom (0), 0);
+            *p = x;
+            p = &x->car.as.cons;
+
+            up = req2_Sxpn (sx, dflt_Cons_ConsAtom (x), up);
         }
         else if (c == ')')
         {
-            if (up.sz == 1)
+            Cons* x;
+            if (!up->cdr)
             {
                 DBog0( "Too many closed parens!" );
                 break;
             }
 
-            y = &up.s[up.sz-1];
-            x = y->car.as.cons;
-            x->car.kind = Cons_Cons;
-            x->car.as.cons = y->cdr;
-            MPopTable( up, 1 );
+            x = up->car.as.cons;
+            p = &x->cdr;
+
+            up = pop_Sxpn (sx, up);
         }
     }
 
-    if (up.sz > 1)
+    if (up->cdr)
     {
-        { BLoop( i, up.sz-1 )
-            Cons* y = &up.s[i+1];
-            if (y->cdr)
-            {
-                giv_Sxpn (sx, y->cdr);
-                y->cdr = 0;
-            }
-        } BLose()
-        DBog1( "%u paren pairs need closing!", up.sz-1 );
+        uint nopen = 0;
+        while (up->cdr)
+        {
+            up = pop_Sxpn (sx, up);
+            ++ nopen;
+        }
+        DBog1( "%u paren pairs need closing!", nopen );
     }
 
-    x = up.s[0].cdr;
-    LoseTable( up );
-    return x;
+    {
+        Cons* x = up->car.as.cons;
+        up->car.as.cons = 0;
+        giv_Sxpn (sx, up);
+        return x;
+    }
 }
 
 
@@ -92,9 +92,10 @@ main (int argc, char** argv)
     x = load_Sxpn (xf, sx);
     dump_Cons (of, x);
     giv_Sxpn (sx, x);
-
     dump_char_OFileB (of, '\n');
+    flush_OFileB (of);
 
+    Claim2( sx->cells.sz ,==, 0 );
     lose_Sxpn (sx);
     lose_sysCx ();
     return 0;

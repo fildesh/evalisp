@@ -6,15 +6,10 @@ CC = gcc
 CONFIG += ansi
 CONFIG += debug
 
-IFLAGS = -I..
-
-CFLAGS += $(IFLAGS)
-
 CxPath = ../cx
 BinPath = ../bin
 PfxBldPath = ../eva-bld
 BldPath = $(PfxBldPath)/eva
-CxBldPath = $(PfxBldPath)/cx
 
 ExeList = eva pipelisp
 Deps := $(ExeList)
