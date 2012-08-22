@@ -8,8 +8,7 @@ CONFIG += debug
 
 CxPath = ../cx
 BinPath = ../bin
-PfxBldPath = ../eva-bld
-BldPath = $(PfxBldPath)/eva
+BldPath = eva
 
 ExeList = eva pipelisp
 Deps := $(ExeList)
