@@ -19,11 +19,11 @@ include $(CxPath)/include.mk
 
 all: $(ExeList)
 
-$(BinPath)/eva: $(BldPath)/eva.o \
+$(call binexe,eva): $(BldPath)/eva.o \
 	$(addprefix $(CxBldPath)/,fileb.o sxpn.o syscx.o)
 	$(CC) $(CFLAGS) -o $@ $^
 
-$(BinPath)/pipelisp: $(BldPath)/pipelisp.o \
+$(call binexe,pipelisp): $(BldPath)/pipelisp.o \
 	$(addprefix $(CxBldPath)/, fileb.o syscx.o)
 	$(CC) $(CFLAGS) -o $@ $^
 

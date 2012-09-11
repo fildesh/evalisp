@@ -13,6 +13,6 @@ include (${CxPath}/include.cmake)
 
 set (CMAKE_RUNTIME_OUTPUT_DIRECTORY ${BinPath})
 
-add_executable (eva ${BldPath}/eva.c ${CxFullCFiles})
-add_executable (pipelisp ${BldPath}/pipelisp.c ${CxFullCFiles})
+addbinexe (eva)
+addbinexe (pipelisp)
 
