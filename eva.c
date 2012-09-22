@@ -11,7 +11,7 @@ load_Sxpn (XFileB* xf, Sxpn* sx)
     char delims[2+sizeof(WhiteSpaceChars)];
     char* s = 0;
     char c = 0;
-    Cons* up = req2_Sxpn (sx, dflt_Cons_ConsAtom (0), 0);
+    Cons* up = take2_Sxpn (sx, dflt_Cons_ConsAtom (0), 0);
     Cons** p = &up->car.as.cons;
 
     delims[0] = '(';
@@ -24,7 +24,7 @@ load_Sxpn (XFileB* xf, Sxpn* sx)
     {
         if (s[0] != '\0')
         {
-            Cons* x = req_Sxpn (sx);
+            Cons* x = take_Sxpn (sx);
             *p = x;
             p = &x->cdr;
             x->car.kind = Cons_AlphaTab;
@@ -33,11 +33,11 @@ load_Sxpn (XFileB* xf, Sxpn* sx)
 
         if (c == '(')
         {
-            Cons* x = req2_Sxpn (sx, dflt_Cons_ConsAtom (0), 0);
+            Cons* x = take2_Sxpn (sx, dflt_Cons_ConsAtom (0), 0);
             *p = x;
             p = &x->car.as.cons;
 
-            up = req2_Sxpn (sx, dflt_Cons_ConsAtom (x), up);
+            up = take2_Sxpn (sx, dflt_Cons_ConsAtom (x), up);
         }
         else if (c == ')')
         {
@@ -69,7 +69,7 @@ load_Sxpn (XFileB* xf, Sxpn* sx)
     {
         Cons* x = up->car.as.cons;
         up->car.as.cons = 0;
-        giv_Sxpn (sx, up);
+        give_Sxpn (sx, up);
         return x;
     }
 }
@@ -91,7 +91,7 @@ main (int argc, char** argv)
 
     x = load_Sxpn (xf, sx);
     dump_Cons (of, x);
-    giv_Sxpn (sx, x);
+    give_Sxpn (sx, x);
     dump_char_OFileB (of, '\n');
     flush_OFileB (of);
 
