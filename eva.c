@@ -6,7 +6,7 @@
 #include <string.h>
 
     Cons*
-load_Sxpn (XFileB* xf, Sxpn* sx)
+xget_Sxpn (XFileB* xf, Sxpn* sx)
 {
     char delims[2+sizeof(WhiteSpaceChars)];
     char* s = 0;
@@ -89,10 +89,10 @@ main (int argc, char** argv)
     if (argi < argc)
         failout_sysCx ("I don't take arguments from humans.");
 
-    x = load_Sxpn (xf, sx);
-    dump_Cons (of, x);
+    x = xget_Sxpn (xf, sx);
+    oput_Cons (of, x);
     give_Sxpn (sx, x);
-    dump_char_OFileB (of, '\n');
+    oput_char_OFileB (of, '\n');
     flush_OFileB (of);
 
     Claim2( sx->cells.sz ,==, 0 );
