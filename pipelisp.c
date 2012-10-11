@@ -389,8 +389,7 @@ static
     void
 clear_TableT_Pair (TableT(Pair)* t)
 {
-    uint i;
-    UFor( i, t->sz )  cleanup_Pair (&t->s[i]);
+    for (i ; t->sz)  cleanup_Pair (&t->s[i]);
     t->sz = 0;
 }
 
@@ -736,9 +735,9 @@ static void cleanup_Function (Function* f)
                 free (f->types);
             break;
         case SetOfFunc:
-            { BLoop( i, f->info.set.funcs.sz )
+            {:for (i ; f->info.set.funcs.sz)
                 cleanup_Function (&f->info.set.funcs.s[i]);
-            } BLose()
+            }
             LoseTable( f->info.set.funcs );
             break;
         default:
@@ -1563,12 +1562,11 @@ static void init_lisp ()
 
 static void cleanup_lisp ()
 {
-    uint i;
-    UFor( i, Named_Functions.sz )
+    for (i ; Named_Functions.sz)
         cleanup_NamedFunction (&Named_Functions.s[i]);
     LoseTable( Named_Functions );
 
-    UFor( i, Named_Types.sz )
+    for (i ; Named_Types.sz)
         cleanup_TypeInfo (&Named_Types.s[i]);
     LoseTable( Named_Types );
 
