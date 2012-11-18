@@ -11,20 +11,23 @@ BinPath = ../bin
 BldPath = eva
 
 ExeList = eva pipelisp
-Deps := $(ExeList)
 ExeList := $(addprefix $(BinPath)/,$(ExeList))
-Objs = $(addprefix $(BldPath)/,$(addsuffix .o,$(Deps)))
+Objs = $(addprefix $(BldPath)/,$(addsuffix .o,$(Deps)) sxpn.o)
 
 include $(CxPath)/include.mk
 
 all: $(ExeList)
 
+$(BldPath)/sxpn.o: $(BldPath)/sxpn.c $(BldPath)/sxpn.h
+$(BldPath)/eva.o: $(BldPath)/sxpn.h
+
 $(call binexe,eva): $(BldPath)/eva.o \
-	$(addprefix $(CxBldPath)/,fileb.o sxpn.o syscx.o)
+	$(BldPath)/sxpn.o \
+	$(addprefix $(CxBldPath)/,fileb.o syscx.o rbtree.o bstree.o)
 	$(CC) $(CFLAGS) -o $@ $^
 
 $(call binexe,pipelisp): $(BldPath)/pipelisp.o \
-	$(addprefix $(CxBldPath)/, fileb.o syscx.o)
+	$(addprefix $(CxBldPath)/,fileb.o syscx.o)
 	$(CC) $(CFLAGS) -o $@ $^
 
 .PHONY: clean

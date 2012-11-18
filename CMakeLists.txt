@@ -7,7 +7,8 @@ set (CxPath ../cx)
 set (BinPath ../bin)
 set (BldPath eva)
 
-list (APPEND CFiles eva.c pipelisp.c)
+list (APPEND CFiles eva.c pipelisp.c sxpn.c)
+list (APPEND HFiles sxpn.h)
 
 include (${CxPath}/include.cmake)
 

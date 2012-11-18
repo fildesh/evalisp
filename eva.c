@@ -1,7 +1,7 @@
 
 #include "cx/syscx.h"
 #include "cx/fileb.h"
-#include "cx/sxpn.h"
+#include "sxpn.h"
 
 #include <string.h>
 
