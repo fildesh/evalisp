@@ -148,11 +148,9 @@ qual_inline
 dflt_Sxpn ()
 {
     DecloStack( Sxpn, sx );
-    DeclAssocia( AlphaTab, SxpnF, fnmap, (SwappedFn) swapped_AlphaTab );
-    DeclAssocia( AlphaTab, ConsAtomKind, kindmap, (SwappedFn) swapped_AlphaTab );
     sx->cells = dflt1_LgTable (sizeof (Cons));
-    sx->fnmap = *fnmap;
-    sx->kindmap = *kindmap;
+    InitAssocia( AlphaTab, SxpnF, sx->fnmap, swapped_AlphaTab );
+    InitAssocia( AlphaTab, ConsAtomKind, sx->kindmap, swapped_AlphaTab );
     return *sx;
 }
 
