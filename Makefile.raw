@@ -23,11 +23,10 @@ $(BldPath)/eva.o: $(BldPath)/sxpn.h
 
 $(call binexe,eva): $(BldPath)/eva.o \
 	$(BldPath)/sxpn.o \
-	$(addprefix $(CxBldPath)/,alphatab.o fileb.o syscx.o rbtree.o bstree.o)
+	$(CxStdObjs) $(addprefix $(CxBldPath)/,rbtree.o bstree.o)
 	$(CC) $(CFLAGS) -o $@ $^
 
-$(call binexe,pipelisp): $(BldPath)/pipelisp.o \
-	$(addprefix $(CxBldPath)/,alphatab.o fileb.o syscx.o)
+$(call binexe,pipelisp): $(BldPath)/pipelisp.o $(CxStdObjs)
 	$(CC) $(CFLAGS) -o $@ $^
 
 .PHONY: clean

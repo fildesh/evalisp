@@ -55,8 +55,8 @@ struct ConsAtomKind
 {
     void (*init) (ConsAtomKind*, ConsAtom*);
     void (*lose) (ConsAtomKind*, ConsAtom*);
-    void (*xget) (XFileB, ConsAtomKind*, ConsAtom*);
-    void (*oput) (OFileB*, ConsAtomKind*, ConsAtom*);
+    void (*xget) (XFile*, ConsAtomKind*, ConsAtom*);
+    void (*oput) (OFile*, ConsAtomKind*, ConsAtom*);
     void* ctx;
 };
 
@@ -74,9 +74,9 @@ struct Sxpn
 };
 
 void
-oput_ConsAtom (OFileB* of, const ConsAtom* ca);
+oput_ConsAtom (OFile* of, const ConsAtom* ca);
 void
-oput_Cons (OFileB* of, const Cons* a);
+oput_Cons (OFile* of, const Cons* a);
 Cons*
 takef_Sxpn (Sxpn* sx, const char* fmt, ...);
 bool

@@ -6,7 +6,7 @@
 #include <string.h>
 
     Cons*
-xget_Sxpn (XFileB* xf, Sxpn* sx)
+xget_Sxpn (XFile* xf, Sxpn* sx)
 {
     char delims[2+sizeof(WhiteSpaceChars)];
     char* s = 0;
@@ -18,9 +18,9 @@ xget_Sxpn (XFileB* xf, Sxpn* sx)
     delims[1] = ')';
     strcpy (&delims[2], WhiteSpaceChars);
 
-    for (s = nextds_XFileB (xf, &c, delims);
+    for (s = nextds_XFile (xf, &c, delims);
          s;
-         s = nextds_XFileB (xf, &c, delims))
+         s = nextds_XFile (xf, &c, delims))
     {
         if (s[0] != '\0')
         {
@@ -82,8 +82,8 @@ main (int argc, char** argv)
         (init_sysCx (&argc, &argv),
          1);
     DecloStack1( Sxpn, sx, dflt_Sxpn () );
-    XFileB* xf = stdin_XFileB ();
-    OFileB* of = stderr_OFileB ();
+    XFile* xf = stdin_XFile ();
+    OFile* of = stderr_OFile ();
     Cons* x;
 
     if (argi < argc)
@@ -92,8 +92,8 @@ main (int argc, char** argv)
     x = xget_Sxpn (xf, sx);
     oput_Cons (of, x);
     give_Sxpn (sx, x);
-    oput_char_OFileB (of, '\n');
-    flush_OFileB (of);
+    oput_char_OFile (of, '\n');
+    flush_OFile (of);
 
     Claim2( sx->cells.sz ,==, 0 );
     lose_Sxpn (sx);

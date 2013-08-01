@@ -115,9 +115,9 @@ struct TypeInfo
 
 struct InternalTypeInfo
 {
-    void* (* copy_fn) (const void*);
-    void  (* free_fn) (void*);
-    void (* write_fn) (OFileB*, const void*);
+  void* (* copy_fn) (const void*);
+  void  (* free_fn) (void*);
+  void (* write_fn) (OFile*, const void*);
 };
 
 
@@ -244,113 +244,113 @@ num_type_members (pkey_t type)
 }
 
 static
-    void
-oput_CString (OFileB* of, const char* str)
+  void
+oput_CString (OFile* of, const char* str)
 {
-    oput_cstr_OFileB (of, str);
+  oput_cstr_OFile (of, str);
 }
 
 static
-    void
-oput_Pair (OFileB* of, const Pair* pair)
+  void
+oput_Pair (OFile* of, const Pair* pair)
 {
-    pkey_t type;
-    const TypeInfo* info;
-    if (funcallP (pair))
-        type = FunctionInternalType;
-    else
-        type = StripPKey(pair->key);
-    assert (type < Named_Types.sz);
-    info = type_info (type);
-    if (internal_type_P (info))
-    {
-        const InternalTypeInfo* internal;
-        internal = internal_type_info (info);
-        assert (internal->write_fn);
-        (*internal->write_fn) (of, pair->val);
-    }
-    else
-    {
-        unsigned i;
-        oput_char_OFileB (of, '(');
-        oput_cstr_OFileB (of, info->name);
-        pair = (Pair*) pair->val;
-
-        for (i = 0; i < info->nmembs; ++i)
-        {
-            oput_char_OFileB (of, ' ');
-            oput_Pair (of, &pair[info->nmembs - i - 1]);
-        }
-        oput_char_OFileB (of, ')');
-    }
-}
-
-static
-    void
-oput_Function (OFileB* of, const Function* f)
-{
-    unsigned i, nargs;
-    if (SetOfFunc == f->type)
-    {
-        const FunctionSet* fs;
-        const char* name;
-        name = "funcs";
-        printf_OFileB (of, "(%s", name);
-        fs = &f->info.set.funcs;
-        for (i = 0; i < fs->sz; ++i)
-        {
-            oput_char_OFileB (of, ' ');
-            oput_Function (of, &fs->s[i]);
-        }
-        oput_char_OFileB (of, ')');
-        return;
-    }
-
-    if (macro_func_P (f))  oput_cstr_OFileB (of, "(macro");
-    else                   oput_cstr_OFileB (of, "(func)");
-
-    nargs = StripWildBit(f->nargs);
-    for (i = 0; i < nargs; ++i)
-    {
-        const TypeInfo* info;
-        pkey_t t;
-        oput_char_OFileB (of, ' ');
-        if (macro_func_P (f))  t = AnyType;
-        else                   t = f->types[f->nargs -i -1];
-        info = type_info (t);
-        oput_cstr_OFileB (of, info->name);
-    }
-    oput_char_OFileB (of, ')');
-}
-
-static
-    void
-oput_Runtime (OFileB* of, const Runtime* run)
-{
+  pkey_t type;
+  const TypeInfo* info;
+  if (funcallP (pair))
+    type = FunctionInternalType;
+  else
+    type = StripPKey(pair->key);
+  assert (type < Named_Types.sz);
+  info = type_info (type);
+  if (internal_type_P (info))
+  {
+    const InternalTypeInfo* internal;
+    internal = internal_type_info (info);
+    assert (internal->write_fn);
+    (*internal->write_fn) (of, pair->val);
+  }
+  else
+  {
     unsigned i;
-    oput_cstr_OFileB (of, "Expression stack:\n");
-    for (i = 0; i < run->e.sz; ++i)
-    {
-        oput_Pair (of, &run->e.s[i]);
-        oput_char_OFileB (of, '\n');
-    }
-    oput_cstr_OFileB (of, "Data stack:\n");
-    for (i = 0; i < run->d.sz; ++i)
-    {
-        oput_Pair (of, &run->d.s[i]);
-        oput_char_OFileB (of, '\n');
-    }
+    oput_char_OFile (of, '(');
+    oput_cstr_OFile (of, info->name);
+    pair = (Pair*) pair->val;
 
-    if (0 != run->e.sz)
+    for (i = 0; i < info->nmembs; ++i)
     {
-        const Pair* const expr = TopTable( run->e );
-        if (funcallP (expr))
-        {
-            oput_cstr_OFileB (of, "Current function:\n");
-            oput_Pair (of, expr);
-            printf_OFileB (of, "\nnargs: %u\n", (uint) StripPKey(expr->key));
-        }
+      oput_char_OFile (of, ' ');
+      oput_Pair (of, &pair[info->nmembs - i - 1]);
     }
+    oput_char_OFile (of, ')');
+  }
+}
+
+static
+  void
+oput_Function (OFile* of, const Function* f)
+{
+  unsigned i, nargs;
+  if (SetOfFunc == f->type)
+  {
+    const FunctionSet* fs;
+    const char* name;
+    name = "funcs";
+    printf_OFile (of, "(%s", name);
+    fs = &f->info.set.funcs;
+    for (i = 0; i < fs->sz; ++i)
+    {
+      oput_char_OFile (of, ' ');
+      oput_Function (of, &fs->s[i]);
+    }
+    oput_char_OFile (of, ')');
+    return;
+  }
+
+  if (macro_func_P (f))  oput_cstr_OFile (of, "(macro");
+  else                   oput_cstr_OFile (of, "(func)");
+
+  nargs = StripWildBit(f->nargs);
+  for (i = 0; i < nargs; ++i)
+  {
+    const TypeInfo* info;
+    pkey_t t;
+    oput_char_OFile (of, ' ');
+    if (macro_func_P (f))  t = AnyType;
+    else                   t = f->types[f->nargs -i -1];
+    info = type_info (t);
+    oput_cstr_OFile (of, info->name);
+  }
+  oput_char_OFile (of, ')');
+}
+
+static
+  void
+oput_Runtime (OFile* of, const Runtime* run)
+{
+  unsigned i;
+  oput_cstr_OFile (of, "Expression stack:\n");
+  for (i = 0; i < run->e.sz; ++i)
+  {
+    oput_Pair (of, &run->e.s[i]);
+    oput_char_OFile (of, '\n');
+  }
+  oput_cstr_OFile (of, "Data stack:\n");
+  for (i = 0; i < run->d.sz; ++i)
+  {
+    oput_Pair (of, &run->d.s[i]);
+    oput_char_OFile (of, '\n');
+  }
+
+  if (0 != run->e.sz)
+  {
+    const Pair* const expr = TopTable( run->e );
+    if (funcallP (expr))
+    {
+      oput_cstr_OFile (of, "Current function:\n");
+      oput_Pair (of, expr);
+      printf_OFile (of, "\nnargs: %u\n", (uint) StripPKey(expr->key));
+    }
+  }
 }
 
 static
@@ -538,7 +538,7 @@ eval1 (Runtime* run)
         {
             GrowTable( run->d, nargs );
             GrowTable( run->e, 1 );
-            oput_Runtime (stderr_OFileB (), run);
+            oput_Runtime (stderr_OFile (), run);
             assert (f && "Bad function call - check types and nargs.");
         }
         dsk = 0;
@@ -1388,7 +1388,7 @@ static void cleanup_runtime (Runtime* run)
 }
 
 static void
-interp_eval (OFileB* of, const char* str)
+interp_eval (OFile* of, const char* str)
 {
     DecloStack( Runtime, run );
 
@@ -1396,7 +1396,7 @@ interp_eval (OFileB* of, const char* str)
 
     eval (run);
     oput_Pair (of, &run->d.s[0]);
-    oput_char_OFileB (of, '\n');
+    oput_char_OFile (of, '\n');
 
     cleanup_runtime (run);
 }
@@ -1437,7 +1437,7 @@ static void assert_eql (const char* lhs, const char* rhs)
 
 
 static void
-test_cases (OFileB* of)
+test_cases (OFile* of)
 {
     (void) of;
     assert_eql ("(yes)",
@@ -1481,11 +1481,11 @@ static void int_macro_fn (Pair* data, void* int_types)
 
 static
     void
-write_int_fn (OFileB* of, const void* val)
+write_int_fn (OFile* of, const void* val)
 {
     int i;
     i = PtrTo(int, val);
-    printf_OFileB (of, "('int %d)", i);
+    printf_OFile (of, "('int %d)", i);
 }
 
 static void int_add_fn (Pair* data, void* zero_typei)
@@ -1524,7 +1524,7 @@ static void init_lisp ()
         internal.copy_fn = 0;
         internal.free_fn = 0;
         internal.write_fn =
-            (void (*) (OFileB*, const void*)) &oput_Function;
+            (void (*) (OFile*, const void*)) &oput_Function;
         typei = add_internal_type ("func", &internal);
         assert (FunctionInternalType == typei);
 
@@ -1533,7 +1533,7 @@ static void init_lisp ()
         assert (VarArgInternalType == typei);
 
         internal.write_fn =
-            (void (*) (OFileB*, const void*)) &oput_CString;
+            (void (*) (OFile*, const void*)) &oput_CString;
         typei = add_internal_type (0, &internal);
         assert (CStringInternalType == typei);
     }
@@ -1578,7 +1578,7 @@ int main (int argc, char** argv)
     int argi =
         (init_sysCx (&argc, &argv),
          1);
-    OFileB* of = stdout_OFileB ();
+    OFile* of = stdout_OFile ();
 
     if (argi < argc)
         failout_sysCx ("I don't take arguments from humans.");
