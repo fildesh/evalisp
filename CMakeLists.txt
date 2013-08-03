@@ -14,6 +14,6 @@ include (${CxPath}/include.cmake)
 
 set (CMAKE_RUNTIME_OUTPUT_DIRECTORY ${BinPath})
 
-addbinexe (eva)
-addbinexe (pipelisp)
+addbinexe (eva eva.c)
+addbinexe (pipelisp pipelisp.c)
 
