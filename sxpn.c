@@ -66,8 +66,8 @@ addfn_Sxpn (Sxpn* sx, const char* name, const SxpnF* f)
         return false;
     }
 
-    key_fo_Assoc (e, &a);
-    val_fo_Assoc (e, f);
+    key_fo_Assoc (&sx->fnmap, e, &a);
+    val_fo_Assoc (&sx->fnmap, e, f);
     return true;
 }
 
@@ -87,8 +87,8 @@ addkind_Sxpn (Sxpn* sx, const char* name, const ConsAtomKind* kind)
         return false;
     }
 
-    key_fo_Assoc (e, &a);
-    val_fo_Assoc (e, kind);
+    key_fo_Assoc (&sx->fnmap, e, &a);
+    val_fo_Assoc (&sx->fnmap, e, kind);
     return true;
 }
 

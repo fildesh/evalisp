@@ -149,8 +149,8 @@ dflt_Sxpn ()
 {
     DecloStack( Sxpn, sx );
     sx->cells = dflt1_LgTable (sizeof (Cons));
-    InitAssocia( AlphaTab, SxpnF, sx->fnmap, swapped_AlphaTab );
-    InitAssocia( AlphaTab, ConsAtomKind, sx->kindmap, swapped_AlphaTab );
+    InitAssocia( AlphaTab, SxpnF, sx->fnmap, cmp_AlphaTab );
+    InitAssocia( AlphaTab, ConsAtomKind, sx->kindmap, cmp_AlphaTab );
     return *sx;
 }
 
