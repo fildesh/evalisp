@@ -522,7 +522,7 @@ eval1 (Runtime* run)
         unsigned nargs;
         const Function* f;
         Pair* dsk;
-        
+
         nargs = (unsigned) StripPKey( expr->key );
 
             /* How many args do you have, really? */
@@ -554,7 +554,7 @@ eval1 (Runtime* run)
             argmap = f->info.std.argmap;
 
             i = run->e.sz;
-            GrowTable( run->e, nexprs ); 
+            GrowTable( run->e, nexprs );
             dsk = &run->d.s[run->d.sz];
             esk = &run->e.s[i];
 
@@ -900,7 +900,7 @@ static pkey_t add_compound_type (const TypeInfo* src)
     dst->nmembs = src->nmembs;
     set_simple_type_P (dst, 0);
     dst->types  = DupliT(pkey_t, src->types, src->nmembs);
-    
+
     assert (compound_type_P (dst));
     return type;
 }
@@ -1134,7 +1134,7 @@ static void interp_def (const char* str)
     Pair* node;
     char* buf = dup_cstr (str);
 
-    
+
     i = parse_list (&parsed, buf);
     assert (i && "Parse failed.");
 
@@ -1170,7 +1170,7 @@ static void interp_def (const char* str)
         const char* typestr;
         char* formalstr;
         node = &parsed.s[i];
-        
+
             /* TODO: macros */
         if (macro_func_P (&func))
             assert (!funcallP (node) && "Use implied macro param type.");
