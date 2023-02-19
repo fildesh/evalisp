@@ -1,6 +1,6 @@
 # Evalisp
 
-Evalisp is a lispy sublanguage of [Fildesh](http://github.com/fildesh/fildesh) that is invoked whenever `$(` appears.
+Evalisp is a lispy sublanguage of [Fildesh](http://github.com/fildesh/fildesh) that is invoked whenever a line starts with `(`.
 In this repository, we explore its future.
 
 ## Goals
@@ -19,14 +19,15 @@ We hope to find a minimal language with:
 
 ## Current Status
 
-Fildesh v0.1.6 will only include 2 expressions: typed assignment and string concatenation.
+Fildesh v0.1.6 includes 2 expressions: string assignment and string concatenation.
 
 ```lisp
-; name=value
-(: name Type value)
+; name="value"
+(: name Str "value")
+(: f Filename "afilename.txt")
 
 ; String concatenation.
-(: concatenated String (+ "hello" " " "world"))
+(: concatenated Str (++ "hello" " " "world"))
 ```
 
 As for this repository's code... it's still a work in progress.
