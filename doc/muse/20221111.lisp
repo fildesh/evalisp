@@ -1,4 +1,4 @@
-;; Common Declaration
+;;;; Common Declaration
 
 ;;; Variable
 (: name Type value)
@@ -8,8 +8,8 @@
   (+ x y))
 (: ((f Int) (x Int) (y Int))
   (+ x y))
-(: ((f Int) (x Int) …)
-  (+ x …))
+(: ((f Int) (x Int) ...)
+  (+ x ...))
 
 ;;; Type
 ; Type singleton.
@@ -23,7 +23,7 @@
 (: ((parse_ascii_bit Bit) "0") 0)
 (: ((parse_ascii_bit Bit) "1") 1)
 
-Macro
+;;; Macro
 (: ((f ...) lhs rhs)
   (+ lhs rhs))
 
