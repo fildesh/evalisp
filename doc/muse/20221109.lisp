@@ -41,7 +41,7 @@
 
 (: ((MyObject . protobuf::myproto)
     mixin1 mixin2 mixin3)
-  (: .swaggy.baggy ?? "mydefault"))
+  (: .swaggy.baggy ?? "mydefault")
   (: .qos (by (. prod "tryhard") (. dev "besteffort")))
   (: .continent.NA 500)
   (: .continent.AP 5)
